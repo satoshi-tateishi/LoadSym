@@ -25,12 +25,12 @@
                 :disabled="!canUndo || readOnly" @click="undo()">元に戻す</button>
         <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
                 :disabled="!canRedo || readOnly" @click="redo()">やり直す</button>
-        <button type="button" class="px-2 py-1 text-xs border rounded bg-white"
-                @click="exportPng()" :disabled="slots.length === 0">PNG</button>
-        <button type="button" class="px-2 py-1 text-xs border rounded bg-white"
-                @click="window.print()" :disabled="slots.length === 0">印刷</button>
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
+                @click="exportPng()" :disabled="!hasContent">PNG</button>
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
+                @click="window.print()" :disabled="!hasContent">印刷</button>
         <button type="button" class="px-2 py-1 text-xs border rounded bg-blue-600 text-white disabled:opacity-30"
-                :disabled="readOnly || slots.length === 0" @click="openSaveDialog()">保存</button>
+                :disabled="readOnly || !hasContent" @click="openSaveDialog()">保存</button>
       </div>
     </div>
 
@@ -39,13 +39,17 @@
     <p x-show="noticeMessage" x-text="noticeMessage"
        class="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2"></p>
 
-    <p x-show="slots.length === 0 && !loading" class="text-sm text-gray-500 bg-white rounded border p-8 text-center">
-      右の「トラック」タブから車両を選んで読み込んでください（最大3台）。
+    <p x-show="truckSlots.length === 0 && !loading" class="text-sm text-gray-500 bg-white rounded border p-6 text-center mb-3">
+      右の「トラック」タブから車両を選んで読み込んでください（最大3台）。<br>
+      先に下の<span class="font-bold">機材置き場</span>へ必要な機材を並べておくこともできます。
     </p>
 
+    <!-- トラック（横並び） -->
     <div class="flex flex-wrap gap-3 items-start">
-      <template x-for="slot in slots" :key="slot.slot">
-        <div class="bg-white rounded border p-2" :class="activeSlot === slot.slot ? 'ring-2 ring-blue-500' : ''"
+      <template x-for="slot in truckSlots" :key="slot.slot">
+        <div class="bg-white rounded border p-2"
+             :class="dropTarget === slot.slot ? 'ring-2 ring-blue-400'
+                     : activeSlot === slot.slot ? 'ring-2 ring-blue-600' : ''"
              @pointerdown="activeSlot = slot.slot">
           <div class="flex items-center gap-2 mb-1">
             <span class="text-xs font-bold" x-text="slot.truck.name"></span>
@@ -54,11 +58,9 @@
           </div>
 
           <svg class="simulator-stage block border border-gray-200"
-               :style="`width:${stageWidth(slot)}px; max-width:100%; aspect-ratio:${stageRatio(slot)}`"
-               :data-slot="slot.slot"
+               :style="stageStyle(slot)" :data-slot="slot.slot"
                @pointerdown="onStagePointerDown($event, slot)"></svg>
 
-          <!-- 集計パネル -->
           <dl class="mt-2 text-[11px] grid grid-cols-2 gap-x-3 gap-y-0.5" x-data="{ s: null }"
               x-effect="s = summaryOf(slot)">
             <template x-if="s">
@@ -85,6 +87,31 @@
         </div>
       </template>
     </div>
+
+    <!-- 機材置き場（トラックの下・幅いっぱい） -->
+    <template x-if="stagingSlot">
+      <div class="bg-white rounded border p-2 mt-3"
+           :class="dropTarget === stagingSlot.slot ? 'ring-2 ring-blue-400'
+                   : activeSlot === stagingSlot.slot ? 'ring-2 ring-blue-600' : ''"
+           @pointerdown="activeSlot = stagingSlot.slot">
+        <div class="flex items-center gap-3 mb-1" x-data="{ s: null }" x-effect="s = summaryOf(stagingSlot)">
+          <span class="text-xs font-bold">機材置き場</span>
+          <template x-if="s">
+            <span class="text-[11px]" :class="s.placementCount ? 'text-amber-700' : 'text-green-700'"
+                  x-text="s.placementCount
+                    ? `積み込み待ち ${s.placementCount} 点 / 合計 ${s.totalWeightKg.toLocaleString()} kg`
+                    : '積み込み待ちなし'"></span>
+          </template>
+          <span class="ml-auto text-[10px] text-gray-500 print-hidden">
+            必要な機材をここに並べてから、トラックへドラッグして積み込みます。
+          </span>
+        </div>
+
+        <svg class="simulator-stage block border border-gray-200"
+             :style="stageStyle(stagingSlot)" :data-slot="stagingSlot.slot"
+             @pointerdown="onStagePointerDown($event, stagingSlot)"></svg>
+      </div>
+    </template>
 
     <!-- 選択中の機材の寸法 -->
     <div x-show="selectedInfo" class="mt-2 bg-white rounded border p-2 text-[11px] print-hidden">

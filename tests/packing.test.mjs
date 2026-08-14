@@ -1,7 +1,9 @@
 // packing.js（レイアウト状態の操作と集計）の回帰テスト。`npm test` で実行する。
 
-import { movePlacement, rotatePlacement, summarize, clearances, createPlacement }
-  from '../docs/assets/js/packing.js';
+import {
+  movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
+  createPlacement, createStagingSlot, isStaging, STAGING_SLOT
+} from '../docs/assets/js/packing.js';
 
 let pass = 0;
 let fail = 0;
@@ -149,6 +151,75 @@ console.log('# createPlacement');
   eq('既存機材と重ならない位置に置かれる', created.x >= 420 || created.y >= 620, true);
   eq('回転は0で作られる', created.rotation, 0);
   eq('スナップショットを持つ', created.snapshot.name, 'B');
+}
+
+console.log('# 機材置き場');
+{
+  const staging = createStagingSlot();
+  eq('スロット0で作られる', staging.slot, STAGING_SLOT);
+  eq('種別がstaging', isStaging(staging), true);
+  eq('高さ制限なし', staging.truck.bedHeightMm, null);
+  eq('積載重量制限なし', staging.truck.maxPayloadKg, null);
+  eq('中身は空', staging.placements.length, 0);
+}
+{
+  // bedHeightMm が null のとき、素の比較だと 0 扱いになり全機材が高さ超過になる回帰テスト
+  const staging = createStagingSlot();
+  staging.placements = [
+    { id: 'p1', snapshot: snapshot('背の高い機材', 600, 600, 2500, 30), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('低い機材', 600, 600, 200, 10), x: 620, y: 10, rotation: 0 }
+  ];
+  const s = summarize(staging);
+  eq('高さ超過を判定しない', s.overHeightCount, 0);
+  eq('積載率は算出しない', s.payloadRatio, null);
+  eq('過積載にならない', s.overPayload, false);
+  eq('総重量は集計する', s.totalWeightKg, 40);
+}
+
+console.log('# movePlacementToSlot（エリア間移動）');
+{
+  const staging = createStagingSlot();
+  staging.placements = [
+    { id: 'p1', snapshot: snapshot('メインSP', 700, 500, 900, 45), x: 1000, y: 500, rotation: 0 }
+  ];
+  const truck = makeSlot([
+    { id: 't1', snapshot: snapshot('先客', 600, 600, 500, 20), x: 10, y: 10, rotation: 0 }
+  ]);
+
+  // 荷台の左前あたりへドロップ → 壁にスナップし、先客とぶつかるので押し出される
+  const r = movePlacementToSlot(staging, truck, 'p1', { x: 5, y: 4 }, 60);
+  eq('移動元から取り除かれる', r.source.length, 0);
+  eq('移動先に追加される', r.target.length, 2);
+
+  const moved = r.target.find((p) => p.id === 'p1');
+  eq('移動先で壁にスナップする', { x: moved.x, y: moved.y }, { x: 10, y: 10 });
+
+  // p1(700x500) の下へ押し出される。右へ逃がすより移動量が小さいため。
+  const pushed = r.target.find((p) => p.id === 't1');
+  eq('先客が押し出される', { x: pushed.x, y: pushed.y }, { x: 10, y: 520 });
+  eq('クリアランス10mm', pushed.y - (moved.y + 500), 10);
+  eq('重なりが残らない', summarize({ ...truck, placements: r.target }).invalidCount, 0);
+  eq('収束する', r.truncated, false);
+}
+{
+  // トラック → 置き場へ戻せる。機材のスナップショットは失われない。
+  const truck = makeSlot([
+    { id: 'p1', snapshot: snapshot('アンプラック', 650, 900, 1400, 130), x: 10, y: 10, rotation: 90 }
+  ]);
+  const staging = createStagingSlot();
+  const r = movePlacementToSlot(truck, staging, 'p1', { x: 2000, y: 800 }, 60);
+  const moved = r.target[0];
+  eq('トラック側が空になる', r.source.length, 0);
+  eq('機材情報が保たれる', moved.snapshot.name, 'アンプラック');
+  eq('回転角も保たれる', moved.rotation, 90);
+  eq('置き場の集計に乗る', summarize({ ...staging, placements: r.target }).totalWeightKg, 130);
+}
+{
+  // 存在しないidを渡しても壊れない
+  const staging = createStagingSlot();
+  const truck = makeSlot([]);
+  const r = movePlacementToSlot(staging, truck, 'missing', { x: 0, y: 0 }, 60);
+  eq('存在しない配置は無視する', { s: r.source.length, t: r.target.length }, { s: 0, t: 0 });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

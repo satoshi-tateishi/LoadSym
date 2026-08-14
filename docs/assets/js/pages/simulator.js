@@ -15,7 +15,10 @@ import { listEquipments, createEquipment, updateEquipment, deleteEquipment } fro
 import { listTrucks, createTruck, updateTruck, deleteTruck, replaceObstacles } from '../trucks.js';
 import { saveLayout, loadLayout, toSlots } from '../layouts.js';
 import { createHistory } from '../history.js';
-import { createPlacement, movePlacement, rotatePlacement, summarize, clearances } from '../packing.js';
+import {
+  createPlacement, movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
+  createStagingSlot, isStaging, STAGING_SLOT
+} from '../packing.js';
 import { renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM }
   from '../renderer.js';
 import { downloadSvgAsPng } from '../export-png.js';
@@ -45,8 +48,10 @@ export function simulator() {
     truckQuery: '',
 
     slots: [],
-    activeSlot: 1,
+    activeSlot: STAGING_SLOT,
     selectedId: null,
+    /** ドラッグ中に「ここに落ちる」と示すエリアのスロット番号。 */
+    dropTarget: null,
 
     layoutId: null,
     layoutName: '',
@@ -76,6 +81,7 @@ export function simulator() {
 
         const layoutId = new URLSearchParams(window.location.search).get('layout');
         if (layoutId) await this.openLayout(layoutId);
+        else this.resetHistory([createStagingSlot()]);
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
@@ -135,8 +141,17 @@ export function simulator() {
 
     // ---------------- 荷台の読み込み ----------------
 
+    /** 機材置き場を除いた、実際に読み込まれているトラック。 */
+    get truckSlots() {
+      return this.slots.filter((slot) => !isStaging(slot));
+    },
+
+    get stagingSlot() {
+      return this.slots.find((slot) => isStaging(slot)) ?? null;
+    },
+
     loadTruck(truck) {
-      if (this.readOnly || this.slots.length >= 3) return;
+      if (this.readOnly || this.truckSlots.length >= 3) return;
 
       const used = new Set(this.slots.map((slot) => slot.slot));
       const slotNumber = [1, 2, 3].find((candidate) => !used.has(candidate));
@@ -215,6 +230,7 @@ export function simulator() {
       const slots = this.rawSlots();
       const working = slots.find((item) => item.slot === slot.slot);
       const placement = working.placements.find((item) => item.id === placementId);
+      const start = { x: placement.x, y: placement.y };
       const origin = clientToBed(svg, event.clientX, event.clientY);
       const offset = { x: origin.x - placement.x, y: origin.y - placement.y };
 
@@ -228,29 +244,79 @@ export function simulator() {
         moved = true;
         // ドラッグ中は描画し直さず座標だけ書き換える（ポインタキャプチャを維持するため）
         updatePlacementPosition(svg, placement);
+        // どのエリアに落ちるかを先に見せる。ポインタキャプチャ中でも
+        // elementFromPoint はポインタ直下の要素を返すので判定に使える。
+        this.dropTarget = this.stageSlotAt(moveEvent.clientX, moveEvent.clientY);
       };
 
-      const onUp = () => {
+      const onUp = (upEvent) => {
         svg.releasePointerCapture(event.pointerId);
         svg.removeEventListener('pointermove', onMove);
         svg.removeEventListener('pointerup', onUp);
         svg.removeEventListener('pointercancel', onUp);
+        this.dropTarget = null;
 
         if (!moved) {
           this.renderAll();
           return;
         }
 
-        const threshold = SNAP_PIXELS * mmPerPixel(svg);
-        const result = movePlacement(working, placementId, { x: placement.x, y: placement.y }, threshold);
-        working.placements = result.placements;
-        this.warnIfTruncated(result.truncated);
-        this.commit(slots);
+        const dropSlot = this.stageSlotAt(upEvent.clientX, upEvent.clientY);
+
+        // エリアの外で離した場合は、掴む前の位置に戻す。
+        // 荷台外の座標をそのまま採用して赤くするより、意図が分かりやすい。
+        if (dropSlot === null) {
+          placement.x = start.x;
+          placement.y = start.y;
+          this.slots = slots;
+          this.renderAll();
+          return;
+        }
+
+        if (dropSlot === working.slot) {
+          const threshold = SNAP_PIXELS * mmPerPixel(svg);
+          const result = movePlacement(working, placementId, { x: placement.x, y: placement.y }, threshold);
+          working.placements = result.placements;
+          this.warnIfTruncated(result.truncated);
+          this.commit(slots);
+          return;
+        }
+
+        this.dropIntoSlot(slots, working, dropSlot, placementId, upEvent, offset);
       };
 
       svg.addEventListener('pointermove', onMove);
       svg.addEventListener('pointerup', onUp);
       svg.addEventListener('pointercancel', onUp);
+    },
+
+    /** 画面座標の真下にあるエリアのスロット番号。エリア外なら null。 */
+    stageSlotAt(clientX, clientY) {
+      const element = document.elementFromPoint(clientX, clientY);
+      const stage = element?.closest('svg[data-slot]');
+      return stage ? Number(stage.dataset.slot) : null;
+    },
+
+    /** 別のエリアへ移す。掴んだ位置のオフセットを保ったまま移動先の座標へ変換する。 */
+    dropIntoSlot(slots, sourceSlot, targetSlotNumber, placementId, upEvent, offset) {
+      const targetSlot = slots.find((item) => item.slot === targetSlotNumber);
+      const targetSvg = document.querySelector(`svg[data-slot="${targetSlotNumber}"]`);
+      if (!targetSlot || !targetSvg) {
+        this.renderAll();
+        return;
+      }
+
+      const point = clientToBed(targetSvg, upEvent.clientX, upEvent.clientY);
+      const position = { x: point.x - offset.x, y: point.y - offset.y };
+      const threshold = SNAP_PIXELS * mmPerPixel(targetSvg);
+
+      const result = movePlacementToSlot(sourceSlot, targetSlot, placementId, position, threshold);
+      sourceSlot.placements = result.source;
+      targetSlot.placements = result.target;
+
+      this.warnIfTruncated(result.truncated);
+      this.activeSlot = targetSlotNumber;
+      this.commit(slots);
     },
 
     // ---------------- キーボード ----------------
@@ -418,13 +484,32 @@ export function simulator() {
       return summarize(JSON.parse(JSON.stringify(slot)));
     },
 
+    /** テンプレートから種別を判定するための橋渡し。 */
+    isStagingSlot(slot) {
+      return isStaging(slot);
+    },
+
+    /** 保存やPNGに意味がある状態か（トラックを読んだか、置き場に機材があるか）。 */
+    get hasContent() {
+      return this.truckSlots.length > 0 || (this.stagingSlot?.placements.length ?? 0) > 0;
+    },
+
     /**
      * 荷台の表示幅。トラックの荷台は縦長なので、幅ではなく「高さを揃える」considerationで
      * 決めたほうが画面を使い切れる。3台並べても収まるよう幅の上限で頭打ちにする。
      */
     stageWidth(slot) {
+      // 機材置き場はトラックの下に幅いっぱいで敷くので、px指定せずCSSに任せる。
+      if (isStaging(slot)) return null;
       const { w, d } = this.stageBox(slot);
       return Math.round(Math.min(MAX_STAGE_WIDTH, TARGET_STAGE_HEIGHT * (w / d)));
+    },
+
+    /** SVGに渡すstyle。トラックは実寸比で幅を決め、置き場は幅いっぱいに伸ばす。 */
+    stageStyle(slot) {
+      const ratio = `aspect-ratio:${this.stageRatio(slot)}`;
+      const width = this.stageWidth(slot);
+      return width === null ? `width:100%; ${ratio}` : `width:${width}px; max-width:100%; ${ratio}`;
     },
 
     stageRatio(slot) {
@@ -646,8 +731,15 @@ export function simulator() {
         this.noticeMessage = '他のユーザーのレイアウトです。編集するには「別のレイアウトとして保存」してください。';
       }
 
-      this.resetHistory(toSlots(row));
-      this.activeSlot = this.slots[0]?.slot ?? 1;
+      // 機材置き場が導入される前に保存されたレイアウトにはスロット0が無い。
+      // 開けなくなると困るので、空の置き場を補ってから開く。
+      const slots = toSlots(row);
+      if (!slots.some((slot) => isStaging(slot))) {
+        slots.unshift(createStagingSlot());
+      }
+
+      this.resetHistory(slots);
+      this.activeSlot = this.truckSlots[0]?.slot ?? STAGING_SLOT;
     },
 
     // ---------------- 書き出し ----------------

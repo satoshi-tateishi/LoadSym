@@ -43,9 +43,15 @@ export function renderTruck(svg, slot, options = {}) {
   );
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
+  // 機材置き場はトラックの荷台と取り違えないよう、破線のグレー枠にする。
+  const staging = slot.truck?.kind === 'staging';
+  const frame = staging
+    ? `<rect x="0" y="0" width="${bed.w}" height="${bed.d}" fill="#f8fafc" stroke="#94a3b8" stroke-width="12" stroke-dasharray="120 80"/>`
+    : `<rect x="0" y="0" width="${bed.w}" height="${bed.d}" fill="#ffffff" stroke="#334155" stroke-width="12"/>`;
+
   svg.innerHTML = [
-    renderRuler(bed),
-    `<rect x="0" y="0" width="${bed.w}" height="${bed.d}" fill="#ffffff" stroke="#334155" stroke-width="12"/>`,
+    renderRuler(bed, staging),
+    frame,
     renderGrid(bed),
     renderObstacles(slot),
     slot.placements
@@ -71,7 +77,7 @@ function renderGrid(bed) {
   return `<g class="grid">${lines.join('')}</g>`;
 }
 
-function renderRuler(bed) {
+function renderRuler(bed, staging = false) {
   const parts = [];
   const fontSize = 110;
 
@@ -91,8 +97,10 @@ function renderRuler(bed) {
   }
 
   // 荷台の全体寸法。図だけ見て何tクラスか分かるように隅に出す。
+  // 置き場は実車の寸法ではないので、寸法ではなく用途を書く。
+  const caption = staging ? '機材置き場（積み込み前の仮置き）' : `${bed.w} × ${bed.d} mm`;
   parts.push(
-    `<text x="${bed.w}" y="${bed.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="end">${bed.w} × ${bed.d} mm</text>`
+    `<text x="${bed.w}" y="${bed.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="end">${escapeXml(caption)}</text>`
   );
 
   return `<g class="ruler" pointer-events="none">${parts.join('')}</g>`;
