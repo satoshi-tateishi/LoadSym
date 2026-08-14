@@ -1,0 +1,55 @@
+name: Supabase keepalive
+
+# Freeプランのプロジェクトは7日間DBアクティビティがないと自動で一時停止される。
+# 1日1回クエリを投げてタイマーをリセットする。
+# 実運用が始まってチームが毎日アクセスするようになれば、このワークフローは不要。
+#
+# Secretsを使わずsupabase-config.jsから値を読むのは、そこに書かれているのが
+# クライアントに埋め込まれる前提のanon keyだけであり、二重管理を避けるため。
+
+on:
+  schedule:
+    # 毎日 03:17 UTC = 12:17 JST（GitHubの定時実行は混雑する毎時00分を避ける）
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Supabase config
+        id: config
+        run: |
+          FILE=docs/assets/js/supabase-config.js
+          URL=$(grep -o "https://[a-z0-9]*\.supabase\.co" "$FILE" | head -1)
+          KEY=$(grep -o "eyJ[A-Za-z0-9._-]*" "$FILE" | head -1)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "Failed to parse SUPABASE_URL / SUPABASE_ANON_KEY from $FILE"
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Ping database
+        env:
+          URL: ${{ steps.config.outputs.url }}
+          KEY: ${{ steps.config.outputs.key }}
+        run: |
+          # equipments への select は anon ロールでもRLSで空配列が返るだけだが、
+          # PostgRESTがPostgresに接続してクエリを実行するためアクティビティとして記録される。
+          CODE=$(curl -sS -o /tmp/ping.json -w '%{http_code}' --max-time 30 --retry 3 --retry-delay 10 \
+            "$URL/rest/v1/equipments?select=id&limit=1" \
+            -H "apikey: $KEY" \
+            -H "Authorization: Bearer $KEY")
+          echo "HTTP $CODE"
+          cat /tmp/ping.json
+          echo
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Supabase ping failed with HTTP $CODE"
+            exit 1
+          fi

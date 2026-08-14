@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-feature-settings: "palt";
+}
+
+/* Alpine.js初期化前のx-show要素の一瞬の表示（FOUC）を防ぐ */
+[x-cloak] {
+  display: none !important;
+}
+
+/* 荷台図のドラッグ中に機材名などがテキスト選択されるのを防ぐ。
+   Pointer Eventsでドラッグを実装しているため、ブラウザ既定の選択挙動と競合する。 */
+.simulator-stage {
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+/* 印刷時はナビゲーションと右ペインを落とし、荷台図と機材リストだけをA4横1枚に出す */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  .print-hidden {
+    display: none !important;
+  }
+
+  .print-full {
+    width: 100% !important;
+    max-width: none !important;
+  }
+}

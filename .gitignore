@@ -1,0 +1,6 @@
+.claude/settings.local.json
+.DS_Store
+sample/
+.playwright-mcp/
+test-account.json
+node_modules/
