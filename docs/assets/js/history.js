@@ -61,8 +61,9 @@ export function createHistory(initialState) {
   };
 }
 
-// structuredCloneは配置データ（プレーンなオブジェクトと配列のみ）に十分。
-// Alpineのプロキシが混ざると複製できないため、呼び出し側は生の値を渡すこと。
+// structuredCloneはAlpineのプロキシを渡されるとDataCloneErrorで落ちる。
+// 配置データはプレーンなJSON値しか持たないため、JSON往復にしておけば
+// プロキシ越しでも安全に複製できる。
 function clone(state) {
-  return structuredClone(state);
+  return JSON.parse(JSON.stringify(state));
 }

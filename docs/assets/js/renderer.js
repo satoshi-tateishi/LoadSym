@@ -10,8 +10,13 @@
 import { toRect } from './geometry.js';
 import { bedOf, obstacleRects } from './packing.js';
 
-/** 尺規（目盛り）を描くために荷台の外側に確保する余白(mm)。 */
-const MARGIN_MM = 260;
+/**
+ * 尺規（目盛り）を描くために荷台の外側に確保する余白(mm)。
+ * 左端は "4000" のような4桁の数値が入るため、font-size 110mm では
+ * 260mm では足りず文字が切れる。実測に合わせて余裕を持たせている。
+ * 画面側の縦横比計算と揃える必要があるため export する。
+ */
+export const MARGIN_MM = 420;
 /** グリッドの間隔(mm)。 */
 const GRID_MM = 100;
 /** 目盛りに数値を入れる間隔(mm)。 */
@@ -121,8 +126,9 @@ function renderPlacement(placement, invalidIds, selectedId) {
   const stroke = selected ? '#1d4ed8' : invalid ? '#991b1b' : '#334155';
   const strokeWidth = selected ? 18 : 8;
 
-  const name = placement.snapshot.name;
-  const fontSize = fitFontSize(name, rect);
+  const label = fitLabel(placement.snapshot.name, rect);
+  const name = label.text;
+  const fontSize = label.fontSize;
 
   return [
     `<g class="placement" data-placement-id="${escapeXml(placement.id)}" style="cursor:grab">`,
@@ -141,14 +147,57 @@ function renderPlacement(placement, invalidIds, selectedId) {
   ].join('');
 }
 
+/** これより小さい文字は読めないので、代わりに文字列を切り詰める。 */
+const MIN_FONT_MM = 55;
+const MAX_FONT_MM = 220;
+
 /**
- * 機材の枠に収まる文字サイズを求める。
- * 幅は文字数から、高さは矩形の短辺から見積もり、小さいほうを採る。
+ * 文字列の見た目の幅をem単位で見積もる。
+ * 日本語（全角）はほぼ1em、ASCIIは半分強。ここを文字数で代用すると
+ * 全角の機材名が枠から大きくはみ出す。
  */
-function fitFontSize(text, rect) {
-  const byWidth = (rect.w * 0.85) / Math.max(text.length * 0.62, 1);
+function textWidthEm(text) {
+  let em = 0;
+  for (const char of text) {
+    em += char.charCodeAt(0) < 0x100 ? 0.55 : 1;
+  }
+  return Math.max(em, 1);
+}
+
+/**
+ * 機材の枠に収まる文字サイズと表示文字列を求める。
+ * 幅は文字幅の見積もりから、高さは矩形の短辺から決め、小さいほうを採る。
+ * 下限を下回る場合は文字を切り詰めて「…」を付ける。
+ */
+function fitLabel(text, rect) {
   const byHeight = rect.d / 3.4;
-  return Math.max(40, Math.min(byWidth, byHeight, 220));
+  const available = rect.w * 0.9;
+  const fontSize = Math.min(available / textWidthEm(text), byHeight, MAX_FONT_MM);
+
+  if (fontSize >= MIN_FONT_MM) {
+    return { text, fontSize: Math.max(fontSize, MIN_FONT_MM) };
+  }
+
+  // 下限の文字サイズで入るところまで切り詰める
+  const budget = available / MIN_FONT_MM;
+  let used = textWidthEm('…');
+  let clipped = '';
+  for (const char of text) {
+    const width = char.charCodeAt(0) < 0x100 ? 0.55 : 1;
+    if (used + width > budget) break;
+    clipped += char;
+    used += width;
+  }
+
+  return {
+    text: clipped ? `${clipped}…` : '',
+    fontSize: Math.max(Math.min(byHeight, MIN_FONT_MM), 30)
+  };
+}
+
+/** 障害物のラベルなど、切り詰めが不要な場面向けの簡易版。 */
+function fitFontSize(text, rect) {
+  return fitLabel(text, rect).fontSize;
 }
 
 /**

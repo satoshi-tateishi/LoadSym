@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoadSym シミュレーター</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body class="min-h-screen bg-gray-100 text-gray-900">
+
+<div id="nav-placeholder" hx-get="partials/nav.html" hx-trigger="load" hx-swap="innerHTML"></div>
+
+<main x-data="simulator()" x-init="init()" x-cloak
+      @keydown.window="onKeyDown($event)"
+      class="flex flex-col lg:flex-row gap-3 p-3">
+
+  <!-- ============ 左: シミュレーター表示部 ============ -->
+  <section class="flex-1 min-w-0 print-full">
+    <div class="flex items-center gap-2 mb-2 print-hidden">
+      <h2 class="font-bold text-sm" x-text="layoutName || '無題のレイアウト'"></h2>
+      <span class="text-xs text-gray-500" x-show="readOnly">（読み取り専用）</span>
+      <div class="ml-auto flex items-center gap-1">
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
+                :disabled="!canUndo || readOnly" @click="undo()">元に戻す</button>
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
+                :disabled="!canRedo || readOnly" @click="redo()">やり直す</button>
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-white"
+                @click="exportPng()" :disabled="slots.length === 0">PNG</button>
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-white"
+                @click="window.print()" :disabled="slots.length === 0">印刷</button>
+        <button type="button" class="px-2 py-1 text-xs border rounded bg-blue-600 text-white disabled:opacity-30"
+                :disabled="readOnly || slots.length === 0" @click="openSaveDialog()">保存</button>
+      </div>
+    </div>
+
+    <p x-show="errorMessage" x-text="errorMessage"
+       class="mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2"></p>
+    <p x-show="noticeMessage" x-text="noticeMessage"
+       class="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2"></p>
+
+    <p x-show="slots.length === 0 && !loading" class="text-sm text-gray-500 bg-white rounded border p-8 text-center">
+      右の「トラック」タブから車両を選んで読み込んでください（最大3台）。
+    </p>
+
+    <div class="flex flex-wrap gap-3 items-start">
+      <template x-for="slot in slots" :key="slot.slot">
+        <div class="bg-white rounded border p-2" :class="activeSlot === slot.slot ? 'ring-2 ring-blue-500' : ''"
+             @pointerdown="activeSlot = slot.slot">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xs font-bold" x-text="slot.truck.name"></span>
+            <button type="button" class="ml-auto text-[10px] text-red-600 hover:underline print-hidden"
+                    x-show="!readOnly" @click="removeSlot(slot.slot)">外す</button>
+          </div>
+
+          <svg class="simulator-stage block border border-gray-200"
+               :style="`width:${stageWidth(slot)}px; max-width:100%; aspect-ratio:${stageRatio(slot)}`"
+               :data-slot="slot.slot"
+               @pointerdown="onStagePointerDown($event, slot)"></svg>
+
+          <!-- 集計パネル -->
+          <dl class="mt-2 text-[11px] grid grid-cols-2 gap-x-3 gap-y-0.5" x-data="{ s: null }"
+              x-effect="s = summaryOf(slot)">
+            <template x-if="s">
+              <div class="contents">
+                <dt class="text-gray-500">配置率</dt>
+                <dd class="text-right tabular-nums" x-text="(s.floorAreaRatio * 100).toFixed(1) + ' %'"></dd>
+                <dt class="text-gray-500">機材点数</dt>
+                <dd class="text-right tabular-nums" x-text="s.placementCount + ' 点'"></dd>
+                <dt class="text-gray-500">総重量</dt>
+                <dd class="text-right tabular-nums" :class="s.overPayload ? 'text-red-600 font-bold' : ''"
+                    x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></dd>
+                <dt class="text-gray-500">はみ出し</dt>
+                <dd class="text-right tabular-nums" :class="s.invalidCount ? 'text-red-600 font-bold' : ''"
+                    x-text="s.invalidCount + ' 点'"></dd>
+                <template x-if="s.overHeightCount">
+                  <dt class="text-amber-700">高さ超過</dt>
+                </template>
+                <template x-if="s.overHeightCount">
+                  <dd class="text-right text-amber-700 tabular-nums" x-text="s.overHeightCount + ' 点'"></dd>
+                </template>
+              </div>
+            </template>
+          </dl>
+        </div>
+      </template>
+    </div>
+
+    <!-- 選択中の機材の寸法 -->
+    <div x-show="selectedInfo" class="mt-2 bg-white rounded border p-2 text-[11px] print-hidden">
+      <template x-if="selectedInfo">
+        <div class="flex flex-wrap gap-x-4 gap-y-1">
+          <span class="font-bold" x-text="selectedInfo.name"></span>
+          <span x-text="`外形 ${selectedInfo.width}×${selectedInfo.depth} mm`"></span>
+          <span x-text="`左 ${selectedInfo.left} / 右 ${selectedInfo.right} mm`"></span>
+          <span x-text="`前 ${selectedInfo.front} / 後 ${selectedInfo.back} mm`"></span>
+          <span class="text-gray-500">R:回転 / Delete:削除 / Ctrl+D:複製 / 矢印:移動</span>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ============ 右: データ・操作タブ ============ -->
+  <aside class="w-full lg:w-96 shrink-0 print-hidden">
+    <div class="bg-white rounded border">
+      <div class="flex border-b text-sm">
+        <button type="button" class="flex-1 py-2" :class="tab === 'equipments' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+                @click="tab = 'equipments'">機材シンボル</button>
+        <button type="button" class="flex-1 py-2" :class="tab === 'trucks' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+                @click="tab = 'trucks'">トラック</button>
+      </div>
+
+      <!-- 機材タブ -->
+      <div x-show="tab === 'equipments'" class="p-2">
+        <div class="flex items-center gap-2 mb-2">
+          <input type="search" x-model="equipmentQuery" placeholder="名称・カテゴリで絞り込み"
+                 class="flex-1 border rounded px-2 py-1 text-xs">
+          <button type="button" class="px-2 py-1 text-xs border rounded bg-blue-600 text-white disabled:opacity-30"
+                  :disabled="!canCreate" @click="openEquipmentForm(null)">追加</button>
+        </div>
+        <p class="text-[11px] text-gray-500 mb-2">
+          機材をクリックすると、選択中の荷台の空きスペースに配置されます。
+        </p>
+
+        <template x-for="section in equipmentSections" :key="section.key">
+          <div class="mb-3" x-show="section.items.length">
+            <h3 class="text-[11px] font-bold text-gray-500 mb-1" x-text="`${section.label}（${section.items.length}）`"></h3>
+            <ul class="space-y-1">
+              <template x-for="item in section.items" :key="item.id">
+                <li class="flex items-center gap-2 border rounded px-2 py-1">
+                  <span class="w-3 h-3 rounded-sm shrink-0" :style="`background:${item.color}`"></span>
+                  <button type="button" class="flex-1 text-left text-xs truncate disabled:opacity-40"
+                          :disabled="slots.length === 0 || readOnly"
+                          @click="addEquipment(item)" x-text="item.name"></button>
+                  <span class="text-[10px] text-gray-500 tabular-nums shrink-0"
+                        x-text="`${item.width_mm}×${item.depth_mm}×${item.height_mm} / ${item.weight_kg}kg`"></span>
+                  <button type="button" class="text-[10px] text-blue-600 hover:underline shrink-0"
+                          x-show="canEditItem(item)" @click="openEquipmentForm(item)">編集</button>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </template>
+      </div>
+
+      <!-- トラックタブ -->
+      <div x-show="tab === 'trucks'" class="p-2">
+        <div class="flex items-center gap-2 mb-2">
+          <input type="search" x-model="truckQuery" placeholder="名称で絞り込み"
+                 class="flex-1 border rounded px-2 py-1 text-xs">
+          <button type="button" class="px-2 py-1 text-xs border rounded bg-blue-600 text-white disabled:opacity-30"
+                  :disabled="!canCreate" @click="openTruckForm(null)">追加</button>
+        </div>
+        <p class="text-[11px] text-gray-500 mb-2">
+          トラックをクリックすると荷台に読み込みます（最大3台まで同時表示）。
+        </p>
+
+        <template x-for="section in truckSections" :key="section.key">
+          <div class="mb-3" x-show="section.items.length">
+            <h3 class="text-[11px] font-bold text-gray-500 mb-1" x-text="`${section.label}（${section.items.length}）`"></h3>
+            <ul class="space-y-1">
+              <template x-for="item in section.items" :key="item.id">
+                <li class="flex items-center gap-2 border rounded px-2 py-1">
+                  <button type="button" class="flex-1 text-left text-xs truncate disabled:opacity-40"
+                          :disabled="slots.length >= 3 || readOnly"
+                          @click="loadTruck(item)" x-text="item.name"></button>
+                  <span class="text-[10px] text-gray-500 tabular-nums shrink-0"
+                        x-text="`${item.bed_width_mm}×${item.bed_depth_mm}×${item.bed_height_mm}`"></span>
+                  <button type="button" class="text-[10px] text-blue-600 hover:underline shrink-0"
+                          x-show="canEditItem(item)" @click="openTruckForm(item)">編集</button>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </template>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 機材フォーム ============ -->
+  <div x-show="equipmentForm" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+       @click.self="equipmentForm = null">
+    <form x-show="equipmentForm" class="bg-white rounded-lg shadow-lg w-full max-w-md p-5 space-y-3"
+          @submit.prevent="saveEquipment()">
+      <template x-if="equipmentForm">
+        <div class="space-y-3">
+          <h3 class="font-bold" x-text="equipmentForm.id ? '機材を編集' : '機材を追加'"></h3>
+          <div>
+            <label class="block text-xs mb-1">名称</label>
+            <input x-model="equipmentForm.name" required class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs mb-1">カテゴリ</label>
+            <input x-model="equipmentForm.category" class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-xs mb-1">幅 mm</label>
+              <input type="number" min="1" x-model.number="equipmentForm.width_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">奥行 mm</label>
+              <input type="number" min="1" x-model.number="equipmentForm.depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">高さ mm</label>
+              <input type="number" min="1" x-model.number="equipmentForm.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs mb-1">重量 kg</label>
+              <input type="number" min="0" step="0.1" x-model.number="equipmentForm.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">識別カラー</label>
+              <input type="color" x-model="equipmentForm.color" class="w-full border rounded h-8">
+            </div>
+          </div>
+          <label class="flex items-center gap-2 text-xs" x-show="isAdmin">
+            <input type="checkbox" x-model="equipmentForm.asTemplate" :disabled="!!equipmentForm.id">
+            共通テンプレートとして登録する（全ユーザーが利用できます）
+          </label>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
+                    :disabled="saving">保存</button>
+            <button type="button" class="px-4 border rounded text-sm" @click="equipmentForm = null">キャンセル</button>
+            <button type="button" x-show="equipmentForm.id" class="px-4 border border-red-300 text-red-600 rounded text-sm"
+                    @click="removeEquipment()">削除</button>
+          </div>
+        </div>
+      </template>
+    </form>
+  </div>
+
+  <!-- ============ トラックフォーム ============ -->
+  <div x-show="truckForm" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+       @click.self="truckForm = null">
+    <form x-show="truckForm" class="bg-white rounded-lg shadow-lg w-full max-w-lg p-5 space-y-3 max-h-[90vh] overflow-y-auto"
+          @submit.prevent="saveTruck()">
+      <template x-if="truckForm">
+        <div class="space-y-3">
+          <h3 class="font-bold" x-text="truckForm.id ? 'トラックを編集' : 'トラックを追加'"></h3>
+          <div>
+            <label class="block text-xs mb-1">名称</label>
+            <input x-model="truckForm.name" required class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-xs mb-1">荷台幅 mm</label>
+              <input type="number" min="1" x-model.number="truckForm.bed_width_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">荷台奥行 mm</label>
+              <input type="number" min="1" x-model.number="truckForm.bed_depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">荷台高さ mm</label>
+              <input type="number" min="1" x-model.number="truckForm.bed_height_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs mb-1">最大積載重量 kg（空欄なら制限なし）</label>
+            <input type="number" min="1" x-model="truckForm.max_payload_kg" class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs font-bold">荷台内の障害物（タイヤハウス・柱など）</span>
+              <button type="button" class="ml-auto text-xs text-blue-600 hover:underline" @click="addObstacleRow()">＋追加</button>
+            </div>
+            <p class="text-[10px] text-gray-500 mb-1">荷台の左前を原点(0,0)とした位置とサイズを mm で入力します。</p>
+            <template x-for="(obstacle, index) in truckForm.obstacles" :key="index">
+              <div class="grid grid-cols-6 gap-1 mb-1 items-center">
+                <input x-model="obstacle.label" placeholder="名称" class="col-span-2 border rounded px-1 py-0.5 text-xs">
+                <input type="number" x-model.number="obstacle.x_mm" placeholder="X" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" x-model.number="obstacle.y_mm" placeholder="Y" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" x-model.number="obstacle.width_mm" placeholder="幅" class="border rounded px-1 py-0.5 text-xs">
+                <div class="flex gap-1">
+                  <input type="number" x-model.number="obstacle.depth_mm" placeholder="奥行" class="w-full border rounded px-1 py-0.5 text-xs">
+                  <button type="button" class="text-red-600 text-xs" @click="truckForm.obstacles.splice(index, 1)">×</button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <label class="flex items-center gap-2 text-xs" x-show="isAdmin">
+            <input type="checkbox" x-model="truckForm.asTemplate" :disabled="!!truckForm.id">
+            共通テンプレートとして登録する
+          </label>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
+                    :disabled="saving">保存</button>
+            <button type="button" class="px-4 border rounded text-sm" @click="truckForm = null">キャンセル</button>
+            <button type="button" x-show="truckForm.id" class="px-4 border border-red-300 text-red-600 rounded text-sm"
+                    @click="removeTruck()">削除</button>
+          </div>
+        </div>
+      </template>
+    </form>
+  </div>
+
+  <!-- ============ 保存ダイアログ ============ -->
+  <div x-show="saveDialog" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+       @click.self="saveDialog = null">
+    <form x-show="saveDialog" class="bg-white rounded-lg shadow-lg w-full max-w-sm p-5 space-y-3"
+          @submit.prevent="saveLayoutNow()">
+      <template x-if="saveDialog">
+        <div class="space-y-3">
+          <h3 class="font-bold">レイアウトを保存</h3>
+          <div>
+            <label class="block text-xs mb-1">名前</label>
+            <input x-model="saveDialog.name" required placeholder="例: 3/15 ○○ホール 仕込み"
+                   class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs mb-1">備考</label>
+            <textarea x-model="saveDialog.note" rows="2" class="w-full border rounded px-2 py-1 text-sm"></textarea>
+          </div>
+          <label class="flex items-center gap-2 text-xs" x-show="layoutId">
+            <input type="checkbox" x-model="saveDialog.asNew">
+            別のレイアウトとして保存する
+          </label>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
+                    :disabled="saving">保存</button>
+            <button type="button" class="px-4 border rounded text-sm" @click="saveDialog = null">キャンセル</button>
+          </div>
+        </div>
+      </template>
+    </form>
+  </div>
+</main>
+
+<script type="module">
+  import { simulator } from './assets/js/pages/simulator.js';
+  window.simulator = simulator;
+</script>
+<script defer src="https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
+<script defer src="https://unpkg.com/alpinejs@3.15.12/dist/cdn.min.js" integrity="sha384-pb6hrQvo4s23cEUFtj0CZkzGE3jyK3pj26RIupXXxhSrrcUA/Cn0lZgcCrGH0t6L" crossorigin="anonymous"></script>
+</body>
+</html>
