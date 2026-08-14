@@ -1,0 +1,287 @@
+// 荷台上の矩形配置に関する純粋な計算をまとめる。
+// SupabaseもDOMも参照しない。将来の2.5D（段積み）対応で手を入れるのもここだけに
+// 収まるよう、状態を持たず入力から出力を返す関数だけで構成している。
+//
+// 座標系: 荷台の左前を原点(0,0)、xが幅方向、yが奥行き方向。単位はすべて整数mm。
+
+/** 壁面および他オブジェクトとの間に確保するクリアランス(mm)。 */
+export const CLEARANCE_MM = 10;
+
+/** 連鎖押し出しの反復上限。密に詰まった状態で振動して止まらなくなるのを防ぐ。 */
+const MAX_PUSH_ITERATIONS = 100;
+
+/**
+ * 回転を反映した外形サイズを返す。90度刻みなので幅と奥行きの入れ替えで済む。
+ */
+export function rotatedSize(widthMm, depthMm, rotation) {
+  const turned = rotation === 90 || rotation === 270;
+  return {
+    w: turned ? depthMm : widthMm,
+    d: turned ? widthMm : depthMm
+  };
+}
+
+/**
+ * 配置(placement)から当たり判定用の矩形を作る。
+ * placement: { id, x, y, rotation, snapshot: { widthMm, depthMm } }
+ */
+export function toRect(placement) {
+  const { w, d } = rotatedSize(
+    placement.snapshot.widthMm,
+    placement.snapshot.depthMm,
+    placement.rotation
+  );
+  return { id: placement.id, x: placement.x, y: placement.y, w, d };
+}
+
+/**
+ * 2つの矩形が重なっているか。gapを渡すと「gap未満しか離れていない」ことを重なりとみなす。
+ * 辺どうしがちょうどgapだけ離れている状態は重なりではない（＝スナップの正解位置）。
+ */
+export function rectsOverlap(a, b, gap = 0) {
+  return (
+    a.x < b.x + b.w + gap &&
+    b.x < a.x + a.w + gap &&
+    a.y < b.y + b.d + gap &&
+    b.y < a.y + a.d + gap
+  );
+}
+
+/** 矩形が荷台の内側に完全に収まっているか。 */
+export function isInsideBed(rect, bed) {
+  return (
+    rect.x >= 0 &&
+    rect.y >= 0 &&
+    rect.x + rect.w <= bed.w &&
+    rect.y + rect.d <= bed.d
+  );
+}
+
+/**
+ * ドラッグ中の矩形について、スナップ後の位置を返す。
+ *
+ * x軸とy軸を独立に評価する。片方の軸だけが壁に吸い付き、もう片方は自由、
+ * という動きのほうが実際の積み込み作業の感覚に近いため。
+ *
+ * 候補は3種類:
+ *   1. 壁面    … 壁からCLEARANCE_MM離れた位置
+ *   2. 隣接    … 既存矩形の外側にCLEARANCE_MM空けて接する位置
+ *   3. 整列    … 既存矩形と辺を揃える位置（この候補だけクリアランスを取らない）
+ *
+ * @param {{x:number,y:number,w:number,d:number}} moving ドラッグ中の矩形（素の位置）
+ * @param {Array} others 既に置かれている矩形と障害物
+ * @param {{w:number,d:number}} bed 荷台内寸
+ * @param {number} thresholdMm この距離以内の候補にだけ吸着する
+ */
+export function snapPosition(moving, others, bed, thresholdMm) {
+  const xCandidates = [CLEARANCE_MM, bed.w - moving.w - CLEARANCE_MM];
+  const yCandidates = [CLEARANCE_MM, bed.d - moving.d - CLEARANCE_MM];
+
+  for (const other of others) {
+    if (other.id === moving.id) continue;
+
+    // 隣接（クリアランスあり）
+    xCandidates.push(other.x - moving.w - CLEARANCE_MM);
+    xCandidates.push(other.x + other.w + CLEARANCE_MM);
+    yCandidates.push(other.y - moving.d - CLEARANCE_MM);
+    yCandidates.push(other.y + other.d + CLEARANCE_MM);
+
+    // 整列（クリアランスなし）
+    xCandidates.push(other.x);
+    xCandidates.push(other.x + other.w - moving.w);
+    yCandidates.push(other.y);
+    yCandidates.push(other.y + other.d - moving.d);
+  }
+
+  return {
+    x: nearestCandidate(moving.x, xCandidates, thresholdMm),
+    y: nearestCandidate(moving.y, yCandidates, thresholdMm)
+  };
+}
+
+function nearestCandidate(value, candidates, thresholdMm) {
+  let best = Math.round(value);
+  let bestDistance = thresholdMm;
+
+  for (const candidate of candidates) {
+    const rounded = Math.round(candidate);
+    const distance = Math.abs(rounded - value);
+    if (distance < bestDistance) {
+      best = rounded;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * 重なりを連鎖的に解消する（押し出し / スライド）。
+ *
+ * pinnedIds に含まれる矩形（＝ユーザーが今動かした/回転させたもの、および障害物）は
+ * 動かさず、それ以外を押し出す。押された矩形はさらに次の押し手になる。
+ *
+ * 一度押し出した矩形は押し出し方向を記憶し、以降その軸方向にしか動かさない。
+ * こうしないとAがBを右に、BがAを左に押し返して振動する。
+ *
+ * さらに、押された矩形は「自分を押した矩形と同じ軸」に逃げることを優先する。
+ * 単純に移動量が最小の向きを選ぶと、一列に並んだ機材を1つ回転させたときに
+ * 2つ目以降が横ではなく手前に逃げてしまい、列が崩れて見えるため。
+ *
+ * @param {Array} rects 全矩形（障害物も pinnedIds に含めて渡す）
+ * @param {Array<string>} pinnedIds 動かさない矩形のid
+ * @param {{w:number,d:number}} bed 荷台内寸
+ * @param {{preferredAxis?: 'x'|'y'}} options 起点の押し出し方向のヒント
+ *   （回転で幅が伸びたなら 'x'、奥行きが伸びたなら 'y' を渡す）
+ * @returns {{rects: Array, moved: boolean, truncated: boolean}}
+ *   rects は座標を更新した新しい配列（入力は破壊しない）。
+ *   truncated は反復上限で打ち切ったかどうか。
+ */
+export function resolveOverlaps(rects, pinnedIds, bed, options = {}) {
+  const working = rects.map((rect) => ({ ...rect }));
+  const byId = new Map(working.map((rect) => [rect.id, rect]));
+  const pinned = new Set(pinnedIds);
+  const pinnedRects = working.filter((rect) => pinned.has(rect.id));
+  const pushDirection = new Map();
+
+  const queue = [...pinnedIds];
+  let iterations = 0;
+  let moved = false;
+  let truncated = false;
+
+  while (queue.length > 0) {
+    if (iterations++ >= MAX_PUSH_ITERATIONS) {
+      truncated = true;
+      break;
+    }
+
+    const pusher = byId.get(queue.shift());
+    if (!pusher) continue;
+
+    for (const target of working) {
+      if (target.id === pusher.id) continue;
+      if (pinned.has(target.id)) continue;
+      if (!rectsOverlap(pusher, target, CLEARANCE_MM)) continue;
+
+      const displacement = computePush(pusher, target, {
+        lockedAxis: pushDirection.get(target.id),
+        preferredAxis: pushDirection.get(pusher.id) ?? options.preferredAxis ?? null,
+        bed,
+        pinnedRects
+      });
+      if (!displacement) continue;
+
+      target.x += displacement.dx;
+      target.y += displacement.dy;
+      pushDirection.set(target.id, displacement.axis);
+      moved = true;
+      queue.push(target.id);
+    }
+  }
+
+  return { rects: working, moved, truncated };
+}
+
+/** 押し出し先がエラー状態（荷台外／不動オブジェクトと重なる）になるときの重み。 */
+const PENALTY_INVALID = 1e6;
+/** 押し出しの軸が連鎖の向きと変わるときの重み。移動量より優先するが、エラーよりは軽い。 */
+const PENALTY_AXIS_SWITCH = 1e3;
+
+/**
+ * pusherから離れる向きにtargetをずらす量を求める。
+ * 4方向の候補をスコアで評価する。スコアは移動量に、
+ *   - 荷台外に出る／不動オブジェクトに重なる  → 大きなペナルティ
+ *   - 連鎖の向き（preferredAxis）と軸が変わる → 中くらいのペナルティ
+ * を加えたもの。既に押し出されている矩形はその軸の候補だけに絞る（振動防止）。
+ */
+function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRects }) {
+  const candidates = [
+    { axis: 'x', dx: pusher.x - target.w - CLEARANCE_MM - target.x, dy: 0 },
+    { axis: 'x', dx: pusher.x + pusher.w + CLEARANCE_MM - target.x, dy: 0 },
+    { axis: 'y', dx: 0, dy: pusher.y - target.d - CLEARANCE_MM - target.y },
+    { axis: 'y', dx: 0, dy: pusher.y + pusher.d + CLEARANCE_MM - target.y }
+  ];
+
+  const usable = lockedAxis
+    ? candidates.filter((candidate) => candidate.axis === lockedAxis)
+    : candidates;
+  if (usable.length === 0) return null;
+
+  let best = null;
+  let bestScore = Infinity;
+
+  for (const candidate of usable) {
+    const landed = {
+      x: target.x + candidate.dx,
+      y: target.y + candidate.dy,
+      w: target.w,
+      d: target.d
+    };
+
+    let score = Math.abs(candidate.dx) + Math.abs(candidate.dy);
+    if (!isInsideBed(landed, bed)) score += PENALTY_INVALID;
+    if (pinnedRects.some((rect) => rect.id !== target.id && rectsOverlap(landed, rect))) {
+      score += PENALTY_INVALID;
+    }
+    if (preferredAxis && candidate.axis !== preferredAxis) score += PENALTY_AXIS_SWITCH;
+
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  if (!best || (best.dx === 0 && best.dy === 0)) return null;
+  return { axis: best.axis, dx: Math.round(best.dx), dy: Math.round(best.dy) };
+}
+
+/**
+ * エラー状態（赤色表示の対象）を判定する。
+ * 荷台からはみ出しているもの、障害物と重なっているもの、
+ * 他の機材とクリアランス未満まで食い込んでいるものを返す。
+ *
+ * @returns {Set<string>} エラーになった矩形のidの集合
+ */
+export function findInvalidRects(rects, bed, obstacles = []) {
+  const invalid = new Set();
+
+  for (const rect of rects) {
+    if (!isInsideBed(rect, bed)) {
+      invalid.add(rect.id);
+    }
+    for (const obstacle of obstacles) {
+      if (rectsOverlap(rect, obstacle)) {
+        invalid.add(rect.id);
+      }
+    }
+  }
+
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      if (rectsOverlap(rects[i], rects[j])) {
+        invalid.add(rects[i].id);
+        invalid.add(rects[j].id);
+      }
+    }
+  }
+
+  return invalid;
+}
+
+/**
+ * 荷台内で、指定サイズの機材を置ける空き位置を左前から探す。
+ * リストから新規にドラッグせずダブルクリック等で追加するときの初期位置に使う。
+ * 見つからなければ null を返す（呼び出し側で荷台外に仮置きする）。
+ */
+export function findFreeSpot(size, occupied, bed, obstacles = []) {
+  const step = 50;
+  const blockers = [...occupied, ...obstacles];
+
+  for (let y = CLEARANCE_MM; y + size.d <= bed.d; y += step) {
+    for (let x = CLEARANCE_MM; x + size.w <= bed.w; x += step) {
+      const candidate = { x, y, w: size.w, d: size.d };
+      const collides = blockers.some((other) => rectsOverlap(candidate, other, CLEARANCE_MM));
+      if (!collides) return { x, y };
+    }
+  }
+  return null;
+}
