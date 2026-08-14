@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoadSym ログイン</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-900 flex items-center justify-center">
+
+  <main class="w-full max-w-sm bg-white rounded-lg shadow p-8" x-data="loginForm()" x-init="init()">
+    <h1 class="text-xl font-bold text-center">LoadSym</h1>
+    <p class="text-xs text-gray-500 text-center mt-1 mb-6">トラック積み込みシミュレーター</p>
+
+    <form class="space-y-4" @submit.prevent="submit">
+      <div>
+        <label class="block text-sm font-medium mb-1" for="email">メールアドレス</label>
+        <input id="email" type="email" x-model="email" required autocomplete="username"
+               class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1" for="password">パスワード</label>
+        <input id="password" type="password" x-model="password" required autocomplete="current-password"
+               class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+
+      <p x-show="errorMessage" x-text="errorMessage" class="text-sm text-red-600"></p>
+
+      <button type="submit" :disabled="loading"
+              class="w-full bg-blue-600 text-white rounded py-2 font-medium disabled:opacity-50">
+        <span x-show="!loading">ログイン</span>
+        <span x-show="loading">ログイン中...</span>
+      </button>
+    </form>
+  </main>
+
+  <script type="module">
+    import { loginForm } from './assets/js/pages/login.js';
+    window.loginForm = loginForm;
+  </script>
+  <script defer src="https://unpkg.com/alpinejs@3.15.12/dist/cdn.min.js" integrity="sha384-pb6hrQvo4s23cEUFtj0CZkzGE3jyK3pj26RIupXXxhSrrcUA/Cn0lZgcCrGH0t6L" crossorigin="anonymous"></script>
+</body>
+</html>

@@ -4,3 +4,6 @@ sample/
 .playwright-mcp/
 test-account.json
 node_modules/
+
+# Playwright MCPがcwdへ書き出すスクリーンショット
+*.png
