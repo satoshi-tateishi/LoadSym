@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoadSym 管理</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body class="min-h-screen bg-gray-100 text-gray-900">
+
+<div id="nav-placeholder" hx-get="partials/nav.html" hx-trigger="load" hx-swap="innerHTML"></div>
+
+<main x-data="admin()" x-init="init()" x-cloak class="max-w-5xl mx-auto p-4">
+
+  <h1 class="font-bold mb-3">管理</h1>
+
+  <p x-show="errorMessage" x-text="errorMessage"
+     class="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2"></p>
+  <p x-show="noticeMessage" x-text="noticeMessage"
+     class="mb-3 text-sm text-green-700 bg-green-50 border border-green-200 rounded px-3 py-2"></p>
+  <p x-show="loading" class="text-sm text-gray-500">読み込み中...</p>
+
+  <div x-show="!loading">
+    <div class="flex border-b text-sm mb-3">
+      <button type="button" class="px-4 py-2" :class="tab === 'users' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+              @click="tab = 'users'">ユーザー</button>
+      <button type="button" class="px-4 py-2" :class="tab === 'categories' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+              @click="tab = 'categories'">カテゴリ</button>
+      <button type="button" class="px-4 py-2" :class="tab === 'templates' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+              @click="tab = 'templates'">テンプレート機材</button>
+      <button type="button" class="px-4 py-2" :class="tab === 'import' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+              @click="tab = 'import'">CSVインポート</button>
+    </div>
+
+    <!-- ============ ユーザー ============ -->
+    <section x-show="tab === 'users'">
+      <p class="text-xs text-gray-500 mb-2">
+        アカウントの新規作成は Supabase ダッシュボードから行います。ここではロールの変更と無効化ができます。
+        自分自身のロール変更・無効化はできません（管理者が 0 人になるのを防ぐため）。
+      </p>
+      <table class="w-full bg-white border rounded text-xs">
+        <thead class="bg-gray-50 text-gray-500">
+          <tr>
+            <th class="text-left px-3 py-2">メールアドレス</th>
+            <th class="text-left px-3 py-2">表示名</th>
+            <th class="text-left px-3 py-2">ロール</th>
+            <th class="text-left px-3 py-2">状態</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="user in users" :key="user.id">
+            <tr class="border-t" :class="user.disabled ? 'bg-gray-50 text-gray-400' : ''">
+              <td class="px-3 py-2">
+                <span x-text="user.email"></span>
+                <span class="text-[10px] text-blue-600 ml-1" x-show="isSelf(user)">（自分）</span>
+              </td>
+              <td class="px-3 py-2" x-text="user.display_name"></td>
+              <td class="px-3 py-2">
+                <select class="border rounded px-1 py-0.5 text-xs disabled:opacity-50"
+                        :disabled="isSelf(user) || saving"
+                        @change="changeRole(user, $event.target.value)">
+                  <template x-for="role in ['Admin', 'Editor', 'Viewer']" :key="role">
+                    <option :value="role" :selected="user.role === role" x-text="role"></option>
+                  </template>
+                </select>
+              </td>
+              <td class="px-3 py-2">
+                <span x-text="user.disabled ? '無効' : '有効'"
+                      :class="user.disabled ? 'text-red-600 font-bold' : 'text-green-700'"></span>
+              </td>
+              <td class="px-3 py-2 text-right">
+                <button type="button" class="hover:underline disabled:opacity-30"
+                        :class="user.disabled ? 'text-green-700' : 'text-red-600'"
+                        :disabled="isSelf(user) || saving"
+                        @click="toggleDisabled(user)"
+                        x-text="user.disabled ? '有効化' : '無効化'"></button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============ カテゴリ ============ -->
+    <section x-show="tab === 'categories'">
+      <div class="flex items-center gap-2 mb-2">
+        <p class="text-xs text-gray-500">
+          機材シンボルの分類です。並び順はシミュレーターの絞り込みでもこの順に出ます。
+        </p>
+        <button type="button" class="ml-auto px-2 py-1 text-xs border rounded bg-blue-600 text-white"
+                @click="openCategoryForm(null)">追加</button>
+      </div>
+      <table class="w-full bg-white border rounded text-xs">
+        <thead class="bg-gray-50 text-gray-500">
+          <tr>
+            <th class="text-left px-3 py-2">カテゴリ名</th>
+            <th class="text-right px-3 py-2">使用中の機材</th>
+            <th class="text-right px-3 py-2">並び順</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="(category, index) in categories" :key="category.id">
+            <tr class="border-t">
+              <td class="px-3 py-2 font-medium" x-text="category.name"></td>
+              <td class="px-3 py-2 text-right tabular-nums" x-text="categoryCount(category) + ' 件'"></td>
+              <td class="px-3 py-2 text-right tabular-nums text-gray-400" x-text="category.sort_order"></td>
+              <td class="px-3 py-2 text-right whitespace-nowrap">
+                <button type="button" class="px-1 disabled:opacity-20" title="上へ"
+                        :disabled="index === 0 || saving" @click="moveCategory(category, -1)">↑</button>
+                <button type="button" class="px-1 disabled:opacity-20" title="下へ"
+                        :disabled="index === categories.length - 1 || saving" @click="moveCategory(category, 1)">↓</button>
+                <button type="button" class="ml-2 text-blue-600 hover:underline"
+                        @click="openCategoryForm(category)">編集</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============ テンプレート機材 ============ -->
+    <section x-show="tab === 'templates'">
+      <div class="flex items-center gap-2 mb-2">
+        <p class="text-xs text-gray-500">全ユーザーが利用できる共通テンプレートです。</p>
+        <button type="button" class="ml-auto px-2 py-1 text-xs border rounded bg-blue-600 text-white"
+                @click="openEquipmentForm(null)">追加</button>
+      </div>
+      <p x-show="templates.length === 0" class="text-sm text-gray-500 bg-white border rounded p-6 text-center">
+        テンプレート機材はまだありません。「追加」か「CSVインポート」で登録してください。
+      </p>
+      <table x-show="templates.length" class="w-full bg-white border rounded text-xs">
+        <thead class="bg-gray-50 text-gray-500">
+          <tr>
+            <th class="text-left px-3 py-2">名称</th>
+            <th class="text-left px-3 py-2">カテゴリ</th>
+            <th class="text-right px-3 py-2">寸法 (W×D×H)</th>
+            <th class="text-right px-3 py-2">重量</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="item in templates" :key="item.id">
+            <tr class="border-t">
+              <td class="px-3 py-2">
+                <span class="inline-block w-3 h-3 rounded-sm align-middle mr-1" :style="`background:${item.color}`"></span>
+                <span x-text="item.name"></span>
+              </td>
+              <td class="px-3 py-2 text-gray-600" x-text="item.categoryName"></td>
+              <td class="px-3 py-2 text-right tabular-nums"
+                  x-text="`${item.width_mm}×${item.depth_mm}×${item.height_mm}`"></td>
+              <td class="px-3 py-2 text-right tabular-nums" x-text="item.weight_kg + ' kg'"></td>
+              <td class="px-3 py-2 text-right">
+                <button type="button" class="text-blue-600 hover:underline"
+                        @click="openEquipmentForm(item)">編集</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============ CSVインポート ============ -->
+    <section x-show="tab === 'import'">
+      <div class="bg-white border rounded p-4 text-xs space-y-3">
+        <p>
+          機材リストをまとめて<strong>共通テンプレート</strong>として取り込みます。
+          UTF-8 と Shift_JIS（Excel 由来）のどちらでも読み込めます。
+        </p>
+        <div>
+          <p class="mb-1">1行目はヘッダー行にしてください。使用できる列:</p>
+          <code class="block bg-gray-50 border rounded px-2 py-1 font-mono" x-text="csvHeaderSample"></code>
+          <p class="text-gray-500 mt-1">
+            必須は <code>name</code> / <code>width_mm</code> / <code>depth_mm</code> / <code>height_mm</code>。
+            <code>category</code> はカテゴリ名で指定します（未指定・不明の場合は「その他」）。
+            <code>color</code> は <code>#rrggbb</code> 形式です。
+          </p>
+        </div>
+        <input type="file" accept=".csv,text/csv" @change="previewCsv($event)" class="text-xs">
+      </div>
+
+      <!-- プレビュー -->
+      <div x-show="importPreview" class="mt-3">
+        <template x-if="importPreview">
+          <div>
+            <div class="flex items-center gap-3 mb-2">
+              <span class="text-xs font-bold" x-text="importPreview.fileName"></span>
+              <span class="text-xs text-gray-500"
+                    x-text="`${importPreview.items.length} 行中 ${importPreview.importable} 行を取り込みます`"></span>
+              <button type="button" class="ml-auto px-3 py-1 text-xs rounded bg-blue-600 text-white disabled:opacity-30"
+                      :disabled="saving || importPreview.importable === 0" @click="confirmImport()">取り込む</button>
+              <button type="button" class="px-3 py-1 text-xs border rounded" @click="importPreview = null">キャンセル</button>
+            </div>
+
+            <template x-for="message in importPreview.errors" :key="message">
+              <p class="text-xs text-red-600 mb-1" x-text="message"></p>
+            </template>
+
+            <table x-show="importPreview.items.length" class="w-full bg-white border rounded text-xs">
+              <thead class="bg-gray-50 text-gray-500">
+                <tr>
+                  <th class="text-right px-2 py-2">行</th>
+                  <th class="text-left px-2 py-2">名称</th>
+                  <th class="text-left px-2 py-2">カテゴリ</th>
+                  <th class="text-right px-2 py-2">寸法</th>
+                  <th class="text-right px-2 py-2">重量</th>
+                  <th class="text-left px-2 py-2">確認事項</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="item in importPreview.items" :key="item.lineNumber">
+                  <tr class="border-t" :class="item.fatal ? 'bg-red-50 text-red-700' : ''">
+                    <td class="px-2 py-1 text-right tabular-nums" x-text="item.lineNumber"></td>
+                    <td class="px-2 py-1" x-text="item.name || '（空）'"></td>
+                    <td class="px-2 py-1" x-text="item.categoryName"></td>
+                    <td class="px-2 py-1 text-right tabular-nums"
+                        x-text="`${item.values.width_mm ?? '?'}×${item.values.depth_mm ?? '?'}×${item.values.height_mm ?? '?'}`"></td>
+                    <td class="px-2 py-1 text-right tabular-nums" x-text="item.values.weight_kg"></td>
+                    <td class="px-2 py-1">
+                      <span x-show="item.fatal" class="font-bold">取り込めません: </span>
+                      <span x-text="item.problems.join(' / ')"></span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ カテゴリフォーム ============ -->
+  <div x-show="categoryForm" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+       @click.self="categoryForm = null">
+    <form x-show="categoryForm" class="bg-white rounded-lg shadow-lg w-full max-w-sm p-5 space-y-3"
+          @submit.prevent="saveCategory()">
+      <template x-if="categoryForm">
+        <div class="space-y-3">
+          <h3 class="font-bold" x-text="categoryForm.id ? 'カテゴリを編集' : 'カテゴリを追加'"></h3>
+          <div>
+            <label class="block text-xs mb-1">カテゴリ名</label>
+            <input x-model="categoryForm.name" required class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs mb-1">並び順（小さいほど上）</label>
+            <input type="number" x-model.number="categoryForm.sort_order" class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <p class="text-[10px] text-gray-500" x-show="categoryForm.id"
+             x-text="`このカテゴリは ${categoryCount(categoryForm)} 件の機材に使われています。`"></p>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
+                    :disabled="saving">保存</button>
+            <button type="button" class="px-4 border rounded text-sm" @click="categoryForm = null">キャンセル</button>
+            <button type="button" x-show="categoryForm.id"
+                    class="px-4 border border-red-300 text-red-600 rounded text-sm disabled:opacity-30"
+                    :disabled="categoryCount(categoryForm) > 0"
+                    @click="removeCategory()">削除</button>
+          </div>
+        </div>
+      </template>
+    </form>
+  </div>
+
+  <!-- ============ テンプレート機材フォーム ============ -->
+  <div x-show="equipmentForm" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
+       @click.self="equipmentForm = null">
+    <form x-show="equipmentForm" class="bg-white rounded-lg shadow-lg w-full max-w-md p-5 space-y-3"
+          @submit.prevent="saveEquipment()">
+      <template x-if="equipmentForm">
+        <div class="space-y-3">
+          <h3 class="font-bold" x-text="equipmentForm.id ? 'テンプレート機材を編集' : 'テンプレート機材を追加'"></h3>
+          <div>
+            <label class="block text-xs mb-1">名称</label>
+            <input x-model="equipmentForm.name" required class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs mb-1">カテゴリ</label>
+            <select x-model="equipmentForm.category_id" required class="w-full border rounded px-2 py-1 text-sm">
+              <template x-for="category in categories" :key="category.id">
+                <option :value="category.id" x-text="category.name"></option>
+              </template>
+            </select>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-xs mb-1">幅 mm</label>
+              <input type="number" min="1" x-model.number="equipmentForm.width_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">奥行 mm</label>
+              <input type="number" min="1" x-model.number="equipmentForm.depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">高さ mm</label>
+              <input type="number" min="1" x-model.number="equipmentForm.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs mb-1">重量 kg</label>
+              <input type="number" min="0" step="0.1" x-model.number="equipmentForm.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs mb-1">識別カラー</label>
+              <input type="color" x-model="equipmentForm.color" class="w-full border rounded h-8">
+            </div>
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
+                    :disabled="saving">保存</button>
+            <button type="button" class="px-4 border rounded text-sm" @click="equipmentForm = null">キャンセル</button>
+            <button type="button" x-show="equipmentForm.id" class="px-4 border border-red-300 text-red-600 rounded text-sm"
+                    @click="removeEquipment()">削除</button>
+          </div>
+        </div>
+      </template>
+    </form>
+  </div>
+</main>
+
+<script type="module">
+  import { admin } from './assets/js/pages/admin.js';
+  window.admin = admin;
+</script>
+<script defer src="https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
+<script defer src="https://unpkg.com/alpinejs@3.15.12/dist/cdn.min.js" integrity="sha384-pb6hrQvo4s23cEUFtj0CZkzGE3jyK3pj26RIupXXxhSrrcUA/Cn0lZgcCrGH0t6L" crossorigin="anonymous"></script>
+</body>
+</html>

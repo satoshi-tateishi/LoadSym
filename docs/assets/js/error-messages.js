@@ -30,6 +30,15 @@ export function translateError(error) {
     return '同じスロットに別のトラックが読み込まれています。画面を更新してもう一度お試しください。';
   }
 
+  // カテゴリは on delete restrict にしてあるので、使用中は削除できない。
+  if (/violates foreign key constraint .*equipments_category_id/i.test(message)) {
+    return 'このカテゴリは機材に使われているため削除できません。先に対象の機材を別のカテゴリへ移してください。';
+  }
+
+  if (/duplicate key value violates unique constraint .*equipment_categories/i.test(message)) {
+    return '同じ名前のカテゴリがすでに存在します。';
+  }
+
   if (/violates foreign key constraint/i.test(message)) {
     return '参照先のデータが見つかりません。画面を更新してもう一度お試しください。';
   }

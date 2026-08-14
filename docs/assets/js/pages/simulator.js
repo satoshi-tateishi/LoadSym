@@ -12,6 +12,7 @@ import { initAuthenticatedPage } from '../layout.js';
 import { canEdit, canEditRecord } from '../auth.js';
 import { translateError } from '../error-messages.js';
 import { listEquipments, createEquipment, updateEquipment, deleteEquipment } from '../equipments.js';
+import { listCategories } from '../categories.js';
 import { listTrucks, createTruck, updateTruck, deleteTruck, replaceObstacles } from '../trucks.js';
 import { saveLayout, loadLayout, toSlots } from '../layouts.js';
 import { createHistory } from '../history.js';
@@ -44,7 +45,10 @@ export function simulator() {
     tab: 'equipments',
     equipments: [],
     trucks: [],
+    categories: [],
     equipmentQuery: '',
+    /** 空文字なら全カテゴリ。 */
+    categoryFilter: '',
     truckQuery: '',
 
     slots: [],
@@ -93,9 +97,20 @@ export function simulator() {
     // ---------------- マスタ ----------------
 
     async reloadMasters() {
-      const [equipments, trucks] = await Promise.all([listEquipments(), listTrucks()]);
+      const [equipments, trucks, categories] = await Promise.all([
+        listEquipments(),
+        listTrucks(),
+        listCategories()
+      ]);
       this.equipments = equipments;
       this.trucks = trucks;
+      this.categories = categories;
+    },
+
+    /** 新規登録時の既定カテゴリ。「その他」があればそれ、無ければ先頭。 */
+    get defaultCategoryId() {
+      const fallback = this.categories.find((category) => category.name === 'その他');
+      return (fallback ?? this.categories[0])?.id ?? null;
     },
 
     get isAdmin() {
@@ -128,8 +143,12 @@ export function simulator() {
     },
 
     get equipmentSections() {
-      return this.sectionsFor(this.equipments, this.equipmentQuery, (item, needle) =>
-        `${item.name} ${item.category}`.toLowerCase().includes(needle)
+      const byCategory = this.categoryFilter
+        ? this.equipments.filter((item) => item.category_id === this.categoryFilter)
+        : this.equipments;
+
+      return this.sectionsFor(byCategory, this.equipmentQuery, (item, needle) =>
+        `${item.name} ${item.categoryName}`.toLowerCase().includes(needle)
       );
     },
 
@@ -544,7 +563,7 @@ export function simulator() {
         : {
             id: null,
             name: '',
-            category: 'その他',
+            category_id: this.defaultCategoryId,
             width_mm: 600,
             depth_mm: 400,
             height_mm: 500,
@@ -561,7 +580,7 @@ export function simulator() {
         const form = this.equipmentForm;
         const values = {
           name: form.name,
-          category: form.category || 'その他',
+          category_id: form.category_id || this.defaultCategoryId,
           width_mm: form.width_mm,
           depth_mm: form.depth_mm,
           height_mm: form.height_mm,

@@ -3,8 +3,10 @@
 
 import { supabase } from './supabase-client.js';
 
+// カテゴリ名は毎回結合して取る。一覧の絞り込みと表示で必ず使うため。
 const COLUMNS =
-  'id, user_id, name, category, width_mm, depth_mm, height_mm, weight_kg, color, note, sort_order';
+  'id, user_id, name, category_id, width_mm, depth_mm, height_mm, weight_kg, color, note, sort_order,' +
+  ' equipment_categories (id, name, sort_order)';
 
 /**
  * 読める機材をすべて取得する（RLSにより、テンプレート・自分・他ユーザーのすべてが返る）。
@@ -18,7 +20,12 @@ export async function listEquipments() {
     .order('name', { ascending: true });
 
   if (error) throw error;
-  return data;
+  return data.map(withCategoryName);
+}
+
+/** 結合したカテゴリを画面が使いやすい形（categoryName）に平すヘルパー。 */
+export function withCategoryName(equipment) {
+  return { ...equipment, categoryName: equipment.equipment_categories?.name ?? '未分類' };
 }
 
 export async function createEquipment(values, userId) {
@@ -29,7 +36,7 @@ export async function createEquipment(values, userId) {
     .single();
 
   if (error) throw error;
-  return data;
+  return withCategoryName(data);
 }
 
 export async function updateEquipment(id, values) {
@@ -41,7 +48,7 @@ export async function updateEquipment(id, values) {
     .single();
 
   if (error) throw error;
-  return data;
+  return withCategoryName(data);
 }
 
 export async function deleteEquipment(id) {
@@ -57,5 +64,5 @@ export async function createEquipments(rows, userId) {
     .select(COLUMNS);
 
   if (error) throw error;
-  return data;
+  return data.map(withCategoryName);
 }

@@ -7,15 +7,25 @@
 
 import { supabase } from './supabase-client.js';
 
-/** 一覧に出す最小限の情報。配置の中身までは引かない。 */
+/**
+ * 一覧に出す最小限の情報。配置の座標までは引かず、件数だけを集計で取る。
+ * 一覧に十数件並んだときに、全配置を引くと無駄が大きいため。
+ */
 export async function listLayouts() {
   const { data, error } = await supabase
     .from('layouts')
-    .select('id, user_id, name, note, created_at, updated_at, layout_trucks (id, slot, truck_snapshot)')
+    .select(
+      'id, user_id, name, note, created_at, updated_at, layout_trucks (id, slot, truck_snapshot, placements (count))'
+    )
     .order('updated_at', { ascending: false });
 
   if (error) throw error;
   return data;
+}
+
+export async function renameLayout(id, name, note) {
+  const { error } = await supabase.from('layouts').update({ name, note }).eq('id', id);
+  if (error) throw error;
 }
 
 /** 作成者の表示名。profilesは直接読めないためRPC経由で最小限だけ取る。 */
