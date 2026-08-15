@@ -21,9 +21,10 @@
       <h2 class="font-bold text-sm" x-text="layoutName || '無題のレイアウト'"></h2>
       <span class="text-xs text-gray-500" x-show="readOnly">（読み取り専用）</span>
       <div class="ml-auto flex items-center gap-1">
-        <!-- クリアランスはスナップの吸着先を決める値。変えても既に置いた機材は動かない。 -->
+        <!-- クリアランスは吸着先とエラー判定の両方の基準。変えても配置は動かさず、
+             確保できていない機材が赤くなる。 -->
         <label class="flex items-center gap-1 text-xs text-gray-600 mr-1"
-               title="機材どうし・機材と壁の間に確保する隙間です。スナップと押し出しの目標値で、既に置いた機材は動きません。">
+               title="機材どうし・機材と壁の間に確保する隙間です。変更しても既に置いた機材は動かさず、確保できていないものを赤くして知らせます。">
           <span>クリアランス</span>
           <input type="number" inputmode="numeric"
                  class="w-14 border rounded px-1 py-1 text-xs text-right tabular-nums disabled:opacity-30"
@@ -77,10 +78,10 @@
                   <span class="text-gray-500">総重量</span>
                   <span class="tabular-nums ml-1"
                         x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></span></span>
-                <!-- 収まらない操作は成立しないので、赤くなるのは保存済みデータ由来の
-                     はみ出しに限られる。件数には重なりと障害物干渉も含むため「要確認」とする。 -->
+                <!-- 収まらない操作は成立しないので、通常の配置操作では赤くならない。
+                     主に「クリアランス設定を広げて、確保できていない機材が出た」ときに点く。 -->
                 <span x-show="s.invalidCount" class="text-red-600 font-bold"
-                      title="荷台からのはみ出し・障害物との干渉・機材どうしの重なりの合計です。"
+                      title="荷台からのはみ出しと、クリアランス不足（壁・障害物・他の機材との隙間が設定値に満たない）の合計です。"
                       x-text="`要確認 ${s.invalidCount} 点`"></span>
                 <span x-show="s.overHeightCount" class="text-amber-700"
                       x-text="`高さ超過 ${s.overHeightCount} 点`"></span>

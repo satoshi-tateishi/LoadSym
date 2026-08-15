@@ -8,7 +8,7 @@
 
 import {
   snapPosition, resolveOverlaps, findInvalidRects, rotatedSize, rectsOverlap, findFreeSpot,
-  DEFAULT_CLEARANCE_MM, MIN_CLEARANCE_MM
+  DEFAULT_CLEARANCE_MM
 } from '../docs/assets/js/geometry.js';
 
 let pass = 0, fail = 0;
@@ -115,16 +115,25 @@ eq('接していたらエラー',
     { id: 'b', x: 610, y: 10, w: 600, d: 400 }
   ], bed)],
   ['a', 'b']);
-eq('最低クリアランスがあれば正常',
-  [...findInvalidRects([
-    { id: 'a', x: 10, y: 10, w: 600, d: 400 },
-    { id: 'b', x: 610 + MIN_CLEARANCE_MM, y: 10, w: 600, d: 400 }
-  ], bed)],
-  []);
-// 壁には寄せてよい（実作業では普通の積み方）
-eq('壁ぴったりは正常',
-  [...findInvalidRects([{ id: 'a', x: 0, y: 0, w: 600, d: 400 }], bed)],
-  []);
+
+// 判定の基準は設定値そのもの。設定を広げると、確保できていない機材が赤くなる。
+const packed = [
+  { id: 'a', x: 10, y: 10, w: 600, d: 400 },
+  { id: 'b', x: 615, y: 10, w: 600, d: 400 }
+];
+eq('5mm設定なら5mm間隔は正常', [...findInvalidRects(packed, bed, [], 5)], []);
+eq('10mm設定にすると足りない2点が赤くなる', [...findInvalidRects(packed, bed, [], 10)], ['a', 'b']);
+eq('1mm設定なら余裕で正常', [...findInvalidRects(packed, bed, [], 1)], []);
+// 機材置き場は 0 を渡す。実際に重なっているものだけを見る。
+eq('0を渡すと重なりだけを見る', [...findInvalidRects(packed, bed, [], 0)], []);
+
+// 壁との間にも設定値ぶんの隙間を要求する
+eq('壁ぴったりは足りない', [...findInvalidRects([{ id: 'a', x: 0, y: 10, w: 600, d: 400 }], bed, [], 5)], ['a']);
+eq('壁から離れていれば正常', [...findInvalidRects([{ id: 'a', x: 5, y: 10, w: 600, d: 400 }], bed, [], 5)], []);
+// 荷台の幅いっぱいの機材は、両側にクリアランスを取れない。収まっていれば良しとする
+// （そうしないと動かしても直せない赤が残る）。
+eq('幅いっぱいの機材は収まっていれば良し',
+  [...findInvalidRects([{ id: 'a', x: 0, y: 10, w: bed.w, d: 400 }], bed, [], 5)], []);
 
 console.log('# findFreeSpot');
 {

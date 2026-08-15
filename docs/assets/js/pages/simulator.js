@@ -556,7 +556,8 @@ export function simulator() {
 
     /**
      * クリアランスを変える。既に置いてある機材は動かさない。
-     * 勝手に配置が変わるほうが分かりにくいので、次の操作から新しい値で吸着させる。
+     * 勝手に配置が変わるほうが分かりにくいので、動かす代わりに、新しい隙間を
+     * 確保できていない機材を赤くして知らせる。
      */
     setClearance(value) {
       if (this.readOnly) return;
@@ -564,7 +565,15 @@ export function simulator() {
       if (next === this.clearanceMm) return;
 
       this.clearanceMm = next;
-      this.notice(`クリアランスを ${next}mm にしました。既に置いてある機材はそのままです。`);
+      this.renderAll();
+
+      const short = this.rawSlots()
+        .reduce((total, slot) => total + summarize(slot, next).invalidCount, 0);
+      this.notice(
+        short > 0
+          ? `クリアランスを ${next}mm にしました。確保できていない機材が ${short} 点あります（赤色）。配置は動かしていません。`
+          : `クリアランスを ${next}mm にしました。すべての機材が確保できています。`
+      );
     },
 
     noticeIfTruncated(truncated) {
@@ -588,7 +597,7 @@ export function simulator() {
           if (!svg) continue;
           const raw = JSON.parse(JSON.stringify(slot));
           renderTruck(svg, raw, {
-            invalidIds: summarize(raw).invalidIds,
+            invalidIds: summarize(raw, this.clearanceMm).invalidIds,
             selectedId: this.selectedId
           });
         }
@@ -596,7 +605,7 @@ export function simulator() {
     },
 
     summaryOf(slot) {
-      return summarize(JSON.parse(JSON.stringify(slot)));
+      return summarize(JSON.parse(JSON.stringify(slot)), this.clearanceMm);
     },
 
     /** テンプレートから種別を判定するための橋渡し。 */

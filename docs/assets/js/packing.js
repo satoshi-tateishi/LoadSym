@@ -11,8 +11,8 @@
 //   snapshot = { name, widthMm, depthMm, heightMm, weightKg, color }
 
 import {
-  toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, findFreeSpot,
-  DEFAULT_CLEARANCE_MM
+  toRect, rotatedSize, resolveOverlaps, findInvalidRects, findOutsideRects, snapPosition,
+  findFreeSpot, DEFAULT_CLEARANCE_MM
 } from './geometry.js';
 
 // 機材置き場（ステージングエリア）の寸法。
@@ -278,7 +278,7 @@ function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
     return rect ? { ...placement, x: rect.x, y: rect.y } : placement;
   });
 
-  if (rejects(before, { ...slot, placements })) {
+  if (rejects(before, { ...slot, placements }, clearanceMm)) {
     return { placements: before.placements, truncated: resolved.truncated, rejected: true };
   }
 
@@ -286,38 +286,60 @@ function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
 }
 
 /**
- * 操作を棄却すべきか。操作前に問題の無かった機材が、操作の結果はみ出したり
- * 重なったりしたら棄却する。
+ * 操作を棄却すべきか。操作前に問題の無かった機材が、操作の結果そうなったら棄却する。
  *
  * 「結果が少しでも不正なら棄却」にしないのは、はみ出しを含む既存データ
- * （DBは負の座標も許している）を開いたときに、以後あらゆる操作が棄却されて
- * 直せなくなるため。悪化させない操作は通す。
+ * （DBは負の座標も許している）を開いたときや、クリアランス設定を広げて多くの機材が
+ * 赤くなったときに、以後あらゆる操作が棄却されて直せなくなるため。悪化させない操作は通す。
+ *
+ * ただし「はみ出し」と「クリアランス不足」は別々に見ること。ひとまとめにすると、
+ * 設定を広げて全機材が赤くなった状態では、はみ出しを作る操作まで通ってしまう
+ * （どれも既に赤いので、はみ出しに変わったことを検知できない）。
  *
  * 機材置き場は判定しない。積み込み前の作業台なので、収まるかどうかを
  * 問う場所ではない。
  */
-function rejects(before, after) {
+function rejects(before, after, clearanceMm) {
   if (isStaging(after)) return false;
 
-  const was = invalidIdsOf(before);
-  for (const id of invalidIdsOf(after)) {
-    if (!was.has(id)) return true;
+  return (
+    grew(outsideIdsOf(before), outsideIdsOf(after)) ||
+    grew(invalidIdsOf(before, clearanceMm), invalidIdsOf(after, clearanceMm))
+  );
+}
+
+/** after に、before には無かったidが現れたか。 */
+function grew(before, after) {
+  for (const id of after) {
+    if (!before.has(id)) return true;
   }
   return false;
 }
 
-function invalidIdsOf(slot) {
-  return findInvalidRects(placementRects(slot), bedOf(slot), obstacleRects(slot));
+function outsideIdsOf(slot) {
+  return findOutsideRects(placementRects(slot), bedOf(slot));
+}
+
+function invalidIdsOf(slot, clearanceMm) {
+  return findInvalidRects(placementRects(slot), bedOf(slot), obstacleRects(slot), clearanceMm);
+}
+
+/**
+ * エラー判定に使う隙間。機材置き場は 0（実際に重なっているものだけ赤くする）。
+ * 積み込み前の作業台なので、ここで隙間を問うと画面が赤だらけになるだけで役に立たない。
+ */
+function invalidGapOf(slot, clearanceMm) {
+  return isStaging(slot) ? 0 : clearanceMm;
 }
 
 /**
  * 集計パネル用の数値をまとめて返す。
  * 高さはパイロット版では配置計算に使わないが、荷台内寸を超える機材は件数で警告する。
  */
-export function summarize(slot) {
+export function summarize(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const bed = bedOf(slot);
   const rects = placementRects(slot);
-  const invalid = findInvalidRects(rects, bed, obstacleRects(slot));
+  const invalid = findInvalidRects(rects, bed, obstacleRects(slot), invalidGapOf(slot, clearanceMm));
 
   const bedArea = bed.w * bed.d;
   const usedArea = rects.reduce((total, rect) => total + rect.w * rect.d, 0);

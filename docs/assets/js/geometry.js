@@ -5,26 +5,18 @@
 // 座標系: 荷台の左前を原点(0,0)、xが幅方向、yが奥行き方向。単位はすべて整数mm。
 
 // クリアランス（壁面および他オブジェクトとの間に確保する隙間）はレイアウトごとの
-// 設定で、この層では引数として受け取る。既定値だけをここに持つ。
+// 設定で、この層では引数として受け取る。既定値と設定範囲だけをここに持つ。
 //
-// 2種類あることに注意すること。
-//   設定値      … スナップの吸着先・押し出し先・空き探索が目標にする隙間。1〜10mm。
-//   MIN_CLEARANCE_MM … これを下回るとエラー扱いにする下限。設定値とは独立。
-//
-// 下限を別に持つのは、設定値を10mmにしたときに「7mmまで詰めた配置」まで
-// エラーにしてしまうと、矢印キーでの微調整ができなくなるため。設定値は
-// 「放っておくとここに吸い付く」値で、下限は「これ以上は物理的に無理」の線。
+// 吸着先・押し出し先・空き探索の目標であると同時に、エラー判定の基準でもある。
+// 設定を変えると、その隙間を確保できていない機材がその場で赤くなる（配置は動かさない）。
 /** クリアランスの既定値(mm)。 */
 export const DEFAULT_CLEARANCE_MM = 5;
 /** ユーザーが設定できるクリアランスの範囲(mm)。 */
 export const MIN_SETTING_CLEARANCE_MM = 1;
 export const MAX_SETTING_CLEARANCE_MM = 10;
-/**
- * これを下回る隙間はエラーにする(mm)。
- * 0mm（機材どうしが完全に接する）を許すと、手も吊りベルトも入らず実際には
- * 積めない図ができてしまう。
- */
-export const MIN_CLEARANCE_MM = 1;
+// エラー判定にも同じ設定値を使う。かつては「吸着の目標値」と「エラーの下限」を
+// 別々に持っていたが、数字が2つあると挙動を説明しきれない。設定値ひとつにして
+// 「設定した隙間を確保できていないものは赤」と一文で言い切れる形にしてある。
 
 /** 連鎖押し出しの反復上限。密に詰まった状態で振動して止まらなくなるのを防ぐ。 */
 const MAX_PUSH_ITERATIONS = 100;
@@ -184,7 +176,19 @@ export function resolveOverlaps(rects, pinnedIds, bed, options = {}) {
     for (const target of working) {
       if (target.id === pusher.id) continue;
       if (pinned.has(target.id)) continue;
-      if (!rectsOverlap(pusher, target, clearanceMm)) continue;
+      // 押し出しを始める条件は、押し手がユーザーの操作対象かどうかで変える。
+      //
+      //   操作対象（pinned） … クリアランス未満まで近づいていたら押す。
+      //                        これで落とした先・回した先がきちんと隙間を取って収まる。
+      //   連鎖の先           … 実際に重なったときだけ押す。
+      //
+      // 連鎖側までクリアランス基準にすると、クリアランス設定を広げたときに、
+      // 既に詰めて置いてある対まで「解消すべき干渉」とみなして荷台全体の再配置を
+      // 始めてしまう。密な荷台では収束せず（反復上限で打ち切り）、結果が壊れる。
+      // 押し出す距離は下の computePush がクリアランスぶん取るので、連鎖の先でも
+      // 隙間は確保される。
+      const trigger = pinned.has(pusher.id) ? clearanceMm : 0;
+      if (!rectsOverlap(pusher, target, trigger)) continue;
 
       const displacement = computePush(pusher, target, {
         lockedAxis: pushDirection.get(target.id),
@@ -261,30 +265,25 @@ function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRec
 
 /**
  * エラー状態（赤色表示の対象）を判定する。
- * 荷台からはみ出しているもの、障害物や他の機材と MIN_CLEARANCE_MM 未満まで
- * 近づいているものを返す。
+ * 荷台からはみ出しているもの、障害物や他の機材との隙間がクリアランスに
+ * 足りていないものを返す。
  *
- * 隙間の判定にレイアウトの設定値ではなく MIN_CLEARANCE_MM を使うのは、設定を
- * 10mm にしたときに「7mmまで詰めた配置」までエラーになると、矢印キーでの微調整が
- * できなくなるため。設定値はあくまで吸着先で、ここは物理的な下限を見る。
+ * 判定にも設定値をそのまま使う。設定を広げた瞬間に、その隙間を確保できていない
+ * 機材が赤くなる。配置は動かさないので、どこを直せばよいかだけが伝わる。
  *
- * 壁との間には隙間を要求しない。機材を壁に寄せて積むのは実作業では普通で、
- * ドラッグとナッジは clampToBed が設定値ぶん内側で止めるため、通常操作で
- * 壁ぴったりになることもない。
- *
+ * @param {number} clearanceMm 確保すべき隙間。0 を渡すと「実際に重なっているものだけ」を返す
+ *   （機材置き場はこれを使う。積み込み前の作業台で、隙間を問う場所ではないため）。
  * @returns {Set<string>} エラーになった矩形のidの集合
  */
-export function findInvalidRects(rects, bed, obstacles = []) {
+export function findInvalidRects(rects, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
   const invalid = new Set();
-  // gap を渡すと「gap未満しか離れていない」ことを重なりとみなす。
-  const gap = MIN_CLEARANCE_MM;
 
   for (const rect of rects) {
-    if (!isInsideBed(rect, bed)) {
+    if (!fitsInBed(rect, bed, clearanceMm)) {
       invalid.add(rect.id);
     }
     for (const obstacle of obstacles) {
-      if (rectsOverlap(rect, obstacle, gap)) {
+      if (rectsOverlap(rect, obstacle, clearanceMm)) {
         invalid.add(rect.id);
       }
     }
@@ -292,7 +291,7 @@ export function findInvalidRects(rects, bed, obstacles = []) {
 
   for (let i = 0; i < rects.length; i++) {
     for (let j = i + 1; j < rects.length; j++) {
-      if (rectsOverlap(rects[i], rects[j], gap)) {
+      if (rectsOverlap(rects[i], rects[j], clearanceMm)) {
         invalid.add(rects[i].id);
         invalid.add(rects[j].id);
       }
@@ -300,6 +299,35 @@ export function findInvalidRects(rects, bed, obstacles = []) {
   }
 
   return invalid;
+}
+
+/**
+ * 荷台からはみ出している矩形のidを返す。
+ *
+ * クリアランス不足とは別に見る。はみ出しは「物理的に積めない」ので絶対に作らせないが、
+ * クリアランス不足は「設定した余裕が足りない」だけで、設定を広げれば一斉に発生しうる。
+ * 両者を一緒に扱うと、設定を広げて全機材が赤くなった状態で、はみ出しを作る操作まで
+ * 通ってしまう（どれも既に赤いので「悪化した」と判定できないため）。
+ */
+export function findOutsideRects(rects, bed) {
+  return new Set(rects.filter((rect) => !isInsideBed(rect, bed)).map((rect) => rect.id));
+}
+
+/**
+ * 壁との間にクリアランスを確保できているか。
+ *
+ * 荷台の幅いっぱいに近い機材では、両側にクリアランスを取ると物理的に入らなくなる。
+ * その場合は荷台に収まっているかだけを見る。clampToBed の逃がし方と揃えてあり、
+ * こうしないと「動かしても直しようがない赤」が residue として残ってしまう。
+ */
+function fitsInBed(rect, bed, clearanceMm) {
+  if (!isInsideBed(rect, bed)) return false;
+
+  const roomX = bed.w - rect.w >= clearanceMm * 2;
+  const roomY = bed.d - rect.d >= clearanceMm * 2;
+  const okX = !roomX || (rect.x >= clearanceMm && rect.x + rect.w <= bed.w - clearanceMm);
+  const okY = !roomY || (rect.y >= clearanceMm && rect.y + rect.d <= bed.d - clearanceMm);
+  return okX && okY;
 }
 
 /**

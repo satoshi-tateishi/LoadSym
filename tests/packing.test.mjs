@@ -340,24 +340,90 @@ console.log('# クリアランス設定');
   const tight = rotatePlacement(make(), 'p1', 1);
   eq('10mmなら10mm空けて押し出す', wide.placements.find((p) => p.id === 'p2').x, 620);
   eq('1mmなら1mm空けて押し出す', tight.placements.find((p) => p.id === 'p2').x, 611);
+  // 判定にも同じ設定値を使う。設定ごとに見て、どちらも過不足なし。
   eq('どちらもエラーは残らない', [
-    summarize({ ...make(), placements: wide.placements }).invalidCount,
-    summarize({ ...make(), placements: tight.placements }).invalidCount
+    summarize({ ...make(), placements: wide.placements }, 10).invalidCount,
+    summarize({ ...make(), placements: tight.placements }, 1).invalidCount
   ], [0, 0]);
 }
 {
-  // 設定を広げても、既に置いてある機材は動かさない。
-  // 動かすと保存済みの図が勝手に変わってしまう。
+  // 設定を広げても既存の配置は動かさない。代わりに、確保できていない機材を赤くする。
+  // 勝手に動かすと保存済みの図が変わってしまうため、「動かさず知らせる」を選んでいる。
   const slot = makeSlot([
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
     { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 415, y: 10, rotation: 0 }
   ]);
-  eq('5mm間隔の既存配置はエラーにならない', summarize(slot).invalidCount, 0);
+  eq('5mm設定では過不足なし', summarize(slot, 5).invalidCount, 0);
+  eq('10mm設定にすると足りない2点が赤くなる', summarize(slot, 10).invalidCount, 2);
+  eq('赤くなるのは該当する2点', [...summarize(slot, 10).invalidIds].sort(), ['p1', 'p2']);
+  eq('1mm設定なら余裕で足りている', summarize(slot, 1).invalidCount, 0);
 
-  // 触っていない機材を巻き込まないので、10mm設定でも移動は通る
+  // 赤い状態でも編集はできる。悪化させない操作は通すので、直す手立てが残る。
   const r = movePlacement(slot, 'p1', { x: 10, y: 700 }, 0, 10);
-  eq('設定を広げても既存配置は棄却しない', r.rejected, false);
+  eq('赤い状態でも移動は棄却しない', r.rejected, false);
   eq('動かしていない機材はそのまま', r.placements.find((p) => p.id === 'p2').x, 415);
+  eq('動かした側は設定を満たすようになる',
+    summarize({ ...slot, placements: r.placements }, 10).invalidCount, 0);
+}
+{
+  // 設定を広げたあとも編集できること。
+  // 連鎖の押し出しまでクリアランス基準で起動すると、既に詰めて置いてある対まで
+  // 「解消すべき干渉」とみなして荷台全体の再配置を始め、密な荷台では収束せずに
+  // 打ち切られる。結果が壊れるので棄却され、どの機材も動かせなくなっていた。
+  const slot = makeBed(2363, 9090, [
+    { id: 'p1', snapshot: snapshot('A', 1160, 405, 800, 30), x: 1, y: 1, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 1160, 405, 800, 30), x: 1162, y: 1, rotation: 0 },
+    { id: 'p3', snapshot: snapshot('C', 1160, 405, 800, 30), x: 1, y: 407, rotation: 0 },
+    { id: 'p4', snapshot: snapshot('D', 1160, 405, 800, 30), x: 1162, y: 407, rotation: 0 },
+    { id: 'p5', snapshot: snapshot('E', 1160, 405, 800, 30), x: 1, y: 813, rotation: 0 },
+    { id: 'p6', snapshot: snapshot('F', 1160, 405, 800, 30), x: 1162, y: 813, rotation: 0 }
+  ]);
+  eq('前提: 1mm間隔なので10mm設定では全機材が赤い', summarize(slot, 10).invalidCount, 6);
+
+  const r = movePlacement(slot, 'p1', { x: 1, y: 11 }, 0, 10);
+  eq('広げたあとも動かせる', r.rejected, false);
+  eq('押し出しが収束する', r.truncated, false);
+  eq('はみ出しは生まれない', summarize({ ...slot, placements: r.placements }, 0).invalidCount, 0);
+}
+{
+  // 設定を広げて全機材が赤くなっても、はみ出しを作る操作は通さない。
+  // 「はみ出し」と「クリアランス不足」を同じ集合で扱うと、どれも既に赤いために
+  // 「悪化した」と判定できず、荷台の外へ押し出せてしまう。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 800, 600, 500, 10), x: 1, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 800, 600, 500, 10), x: 802, y: 10, rotation: 0 }
+  ]);
+  eq('前提: 10mm設定では全機材が赤い', summarize(slot, 10).invalidCount, 2);
+
+  // 全部赤い状態で、p1 を左の壁の外へ出そうとする
+  const r = movePlacement(slot, 'p1', { x: -200, y: 10 }, 0, 10);
+  eq('赤くても荷台の外へは出せない', r.rejected, true);
+  eq('位置は元のまま', r.placements.find((p) => p.id === 'p1').x, 1);
+
+  // クリアランス不足のまま荷台内で動かすのは通す（直す手立てを残すため）
+  const ok = movePlacement(slot, 'p1', { x: 5, y: 10 }, 0, 10);
+  eq('荷台内の移動は通す', ok.rejected, false);
+  eq('移動が反映される', ok.placements.find((p) => p.id === 'p1').x, 5);
+}
+{
+  // 機材置き場は判定の対象外。作業台なので隙間を問わず、重なりだけを見る。
+  const staging = createStagingSlot();
+  staging.placements = [
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 411, y: 10, rotation: 0 }
+  ];
+  eq('置き場は10mm設定でも赤くしない', summarize(staging, 10).invalidCount, 0);
+  staging.placements[1].x = 200; // 実際に重ねる
+  eq('置き場でも重なりは赤くする', summarize(staging, 10).invalidCount, 2);
+}
+{
+  // 壁との隙間も設定値で見る
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 0, y: 10, rotation: 0 }
+  ]);
+  eq('壁ぴったりは足りない', summarize(slot, 5).invalidCount, 1);
+  slot.placements[0].x = 5;
+  eq('壁から設定値ぶん離れていれば良い', summarize(slot, 5).invalidCount, 0);
 }
 {
   // 重なり0は不可。最低クリアランスを下回る移動は棄却する。
@@ -372,17 +438,18 @@ console.log('# クリアランス設定');
   const [p1, p2] = ['p1', 'p2'].map((id) => touching.placements.find((p) => p.id === id));
   eq('動かした機材は要求どおりの位置', p2.x, 410);
   eq('隣が1mm押しのけられる', p2.x - (p1.x + 400), 1);
-  eq('接触が残らない', summarize({ ...slot, placements: touching.placements }).invalidCount, 0);
+  eq('接触が残らない', summarize({ ...slot, placements: touching.placements }, 1).invalidCount, 0);
 
   // 押しのける余地がなければ棄却される。
   // 機材2つでちょうど埋まる荷台なので、隣はどちらへ逃げても荷台外に出る。
-  const cornered = makeBed(810, 700, [
-    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 0, y: 10, rotation: 0 },
-    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 410, y: 10, rotation: 0 }
+  const cornered = makeBed(812, 700, [
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 1, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 411, y: 10, rotation: 0 }
   ]);
+  eq('前提: 操作前は過不足なし', summarize(cornered, 1).invalidCount, 0);
   const r = movePlacement(cornered, 'p2', { x: 400, y: 10 }, 0, 1);
   eq('逃げ場がなければ棄却する', r.rejected, true);
-  eq('位置は元のまま', r.placements.find((p) => p.id === 'p2').x, 410);
+  eq('位置は元のまま', r.placements.find((p) => p.id === 'p2').x, 411);
 }
 
 console.log('# 空きが無いときは置かない');
