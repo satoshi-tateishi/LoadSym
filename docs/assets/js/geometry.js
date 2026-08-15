@@ -302,18 +302,6 @@ export function findInvalidRects(rects, bed, obstacles = [], clearanceMm = DEFAU
 }
 
 /**
- * 荷台からはみ出している矩形のidを返す。
- *
- * クリアランス不足とは別に見る。はみ出しは「物理的に積めない」ので絶対に作らせないが、
- * クリアランス不足は「設定した余裕が足りない」だけで、設定を広げれば一斉に発生しうる。
- * 両者を一緒に扱うと、設定を広げて全機材が赤くなった状態で、はみ出しを作る操作まで
- * 通ってしまう（どれも既に赤いので「悪化した」と判定できないため）。
- */
-export function findOutsideRects(rects, bed) {
-  return new Set(rects.filter((rect) => !isInsideBed(rect, bed)).map((rect) => rect.id));
-}
-
-/**
  * 壁との間にクリアランスを確保できているか。
  *
  * 荷台の幅いっぱいに近い機材では、両側にクリアランスを取ると物理的に入らなくなる。

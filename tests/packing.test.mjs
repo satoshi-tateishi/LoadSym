@@ -400,6 +400,22 @@ console.log('# クリアランス設定');
   eq('赤くても荷台の外へは出せない', r.rejected, true);
   eq('位置は元のまま', r.placements.find((p) => p.id === 'p1').x, 1);
 
+  // 押しのける余地があるなら、重ねようとしても押し出しで解消して成立する
+  const onto = movePlacement(slot, 'p1', { x: 802, y: 10 }, 0, 10);
+  eq('余地があれば押し出しで解消する', onto.rejected, false);
+  eq('重なりは残らない', summarize({ ...slot, placements: onto.placements }, 1).invalidCount, 0);
+
+  // 余地が無ければ、赤い状態でも接触・重なりは作らせない。
+  // クリアランス不足と同じ集合で見ていると、どれも既に赤いために悪化を検知できない。
+  const tight = makeBed(1603, 700, [
+    { id: 'q1', snapshot: snapshot('A', 800, 600, 500, 10), x: 1, y: 10, rotation: 0 },
+    { id: 'q2', snapshot: snapshot('B', 800, 600, 500, 10), x: 802, y: 10, rotation: 0 }
+  ]);
+  eq('前提: 10mm設定では全機材が赤い', summarize(tight, 10).invalidCount, 2);
+  const collide = movePlacement(tight, 'q1', { x: 802, y: 10 }, 0, 10);
+  eq('逃げ場が無ければ重ねられない', collide.rejected, true);
+  eq('1mm未満は残らない', summarize({ ...tight, placements: collide.placements }, 1).invalidCount, 0);
+
   // クリアランス不足のまま荷台内で動かすのは通す（直す手立てを残すため）
   const ok = movePlacement(slot, 'p1', { x: 5, y: 10 }, 0, 10);
   eq('荷台内の移動は通す', ok.rejected, false);

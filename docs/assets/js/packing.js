@@ -11,8 +11,8 @@
 //   snapshot = { name, widthMm, depthMm, heightMm, weightKg, color }
 
 import {
-  toRect, rotatedSize, resolveOverlaps, findInvalidRects, findOutsideRects, snapPosition,
-  findFreeSpot, DEFAULT_CLEARANCE_MM
+  toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, findFreeSpot,
+  DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM
 } from './geometry.js';
 
 // 機材置き場（ステージングエリア）の寸法。
@@ -292,9 +292,14 @@ function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
  * （DBは負の座標も許している）を開いたときや、クリアランス設定を広げて多くの機材が
  * 赤くなったときに、以後あらゆる操作が棄却されて直せなくなるため。悪化させない操作は通す。
  *
- * ただし「はみ出し」と「クリアランス不足」は別々に見ること。ひとまとめにすると、
- * 設定を広げて全機材が赤くなった状態では、はみ出しを作る操作まで通ってしまう
- * （どれも既に赤いので、はみ出しに変わったことを検知できない）。
+ * ただし判定は2系統に分けること。
+ *
+ *   物理的に不可能な状態 … 荷台からのはみ出しと、設定範囲の下限(1mm)を割り込む近さ。
+ *                          設定値がいくつでも、これは絶対に作らせない。
+ *   クリアランス不足     … 設定した隙間に足りない（設定値で判定）
+ *
+ * ひとまとめにすると、設定を広げて全機材が赤くなった状態では、はみ出しや重なりを
+ * 作る操作まで通ってしまう（どれも既に赤いので、悪化したことを検知できない）。
  *
  * 機材置き場は判定しない。積み込み前の作業台なので、収まるかどうかを
  * 問う場所ではない。
@@ -303,7 +308,10 @@ function rejects(before, after, clearanceMm) {
   if (isStaging(after)) return false;
 
   return (
-    grew(outsideIdsOf(before), outsideIdsOf(after)) ||
+    grew(
+      invalidIdsOf(before, MIN_SETTING_CLEARANCE_MM),
+      invalidIdsOf(after, MIN_SETTING_CLEARANCE_MM)
+    ) ||
     grew(invalidIdsOf(before, clearanceMm), invalidIdsOf(after, clearanceMm))
   );
 }
@@ -316,9 +324,6 @@ function grew(before, after) {
   return false;
 }
 
-function outsideIdsOf(slot) {
-  return findOutsideRects(placementRects(slot), bedOf(slot));
-}
 
 function invalidIdsOf(slot, clearanceMm) {
   return findInvalidRects(placementRects(slot), bedOf(slot), obstacleRects(slot), clearanceMm);
