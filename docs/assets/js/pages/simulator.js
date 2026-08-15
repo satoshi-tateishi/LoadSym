@@ -367,11 +367,14 @@ export function simulator() {
       }
 
       const step = event.shiftKey ? 1 : 10;
+      // 荷台は横向きに描いている（renderer.js: ビューX = 荷台y、ビューY = 荷台w - 荷台x）ため、
+      // 矢印キーは荷台座標そのままではなく、画面上の見た目の向きへ写してから渡す。
+      // そうしないと「→」を押した機材が画面では下へ動く。
       const deltas = {
-        ArrowLeft: { x: -step, y: 0 },
-        ArrowRight: { x: step, y: 0 },
-        ArrowUp: { x: 0, y: -step },
-        ArrowDown: { x: 0, y: step }
+        ArrowLeft: { x: 0, y: -step },
+        ArrowRight: { x: 0, y: step },
+        ArrowUp: { x: step, y: 0 },
+        ArrowDown: { x: -step, y: 0 }
       };
 
       if (deltas[event.key]) {
