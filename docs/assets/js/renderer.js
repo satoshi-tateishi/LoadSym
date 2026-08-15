@@ -184,23 +184,21 @@ function renderPlacement(placement, bed, invalidIds, selectedId) {
   const stroke = selected ? '#1d4ed8' : invalid ? '#991b1b' : '#334155';
   const strokeWidth = selected ? 18 : 8;
 
-  const label = fitLabel(placement.snapshot.name, box);
-  const name = label.text;
-  const fontSize = label.fontSize;
+  // 寸法はシンボルには書かない。枠が小さいと機材名を押しのけて枠からはみ出すうえ、
+  // 選択すれば下部の集計パネルに出るため二重に持つ意味がない。
+  const label = chooseLabel(placement.snapshot.name, box);
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const transform = label.vertical ? ` transform="rotate(-90 ${cx} ${cy})"` : '';
 
   return [
     `<g class="placement" data-placement-id="${escapeXml(placement.id)}" style="cursor:grab">`,
     `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"`,
     ` fill="${escapeXml(fill)}" fill-opacity="${invalid ? 0.85 : 0.7}"`,
     ` stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
-    `<text x="${box.x + box.w / 2}" y="${box.y + box.h / 2}" font-size="${fontSize}"`,
+    `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#0f172a" text-anchor="middle" dominant-baseline="middle" pointer-events="none">`,
-    escapeXml(name),
-    '</text>',
-    `<text x="${box.x + box.w / 2}" y="${box.y + box.h / 2 + fontSize * 1.15}" font-size="${fontSize * 0.75}"`,
-    ` fill="#334155" text-anchor="middle" dominant-baseline="middle" pointer-events="none">`,
-    // 寸法は画面の見た目ではなく、ユーザーが把握している「幅×奥行」で出す。
-    `${rect.w}×${rect.d}`,
+    escapeXml(label.text),
     '</text>',
     '</g>'
   ].join('');
@@ -224,22 +222,50 @@ function textWidthEm(text) {
 }
 
 /**
+ * 機材名をどちら向きに置くか決める。
+ *
+ * 荷台に対して機材が縦長に載ると枠も画面上で縦長になり、横書きのままでは
+ * 短辺に文字幅を押し込むことになって、極端に小さくなるか切り詰められる。
+ * そこで縦横それぞれで見積もり、明確に有利なほうへ寝かせる。
+ * 首を傾けて読ませる不便があるので、僅差では横書きのままにする。
+ */
+function chooseLabel(text, box) {
+  const flat = fitLabel(text, box);
+  const turned = fitLabel(text, { w: box.h, h: box.w });
+
+  const better = flat.clipped
+    ? !turned.clipped || turned.fontSize > flat.fontSize * 1.15
+    : !turned.clipped && turned.fontSize > flat.fontSize * 1.15;
+
+  return better ? { ...turned, vertical: true } : { ...flat, vertical: false };
+}
+
+/**
  * 枠に収まる文字サイズと表示文字列を求める。
  * 引数はビュー座標の矩形（画面上の見た目の縦横）を渡すこと。
+ * 文字を寝かせる場合は縦横を入れ替えて渡す。
  * 幅は文字幅の見積もりから、高さは矩形の高さから決め、小さいほうを採る。
- * 下限を下回る場合は文字を切り詰めて「…」を付ける。
+ * 下限を下回る場合は文字を切り詰めて「…」を付ける（clipped で知らせる）。
  */
 function fitLabel(text, box) {
-  const byHeight = box.h / 3.4;
+  // 1行しか置かないので、行の高さは枠の高さの半分強まで許せる。
+  const byHeight = box.h / 1.8;
   const available = box.w * 0.9;
   const fontSize = Math.min(available / textWidthEm(text), byHeight, MAX_FONT_MM);
 
   if (fontSize >= MIN_FONT_MM) {
-    return { text, fontSize: Math.max(fontSize, MIN_FONT_MM) };
+    return { text, fontSize: Math.max(fontSize, MIN_FONT_MM), clipped: false };
   }
 
-  // 下限の文字サイズで入るところまで切り詰める
-  const budget = available / MIN_FONT_MM;
+  // 下限の文字サイズで入るところまで切り詰める。
+  // 実際に使う文字サイズを先に決めてから切り詰め幅を計算すること。下限の
+  // MIN_FONT_MM を基準にすると、枠が薄くて文字を縮めたときに幅が余る。
+  const size = Math.min(byHeight, MIN_FONT_MM);
+
+  // 下限を割り込む枠は、何を書いても読めないうえ枠から溢れる。文字は諦める。
+  if (size < 30) return { text: '', fontSize: 30, clipped: true };
+
+  const budget = available / size;
   let used = textWidthEm('…');
   let clipped = '';
   for (const char of text) {
@@ -249,10 +275,7 @@ function fitLabel(text, box) {
     used += width;
   }
 
-  return {
-    text: clipped ? `${clipped}…` : '',
-    fontSize: Math.max(Math.min(byHeight, MIN_FONT_MM), 30)
-  };
+  return { text: clipped ? `${clipped}…` : '', fontSize: size, clipped: true };
 }
 
 /** 描画時に控えた荷台の実寸を読み出す。 */
@@ -271,23 +294,23 @@ export function updatePlacementPosition(svg, placement) {
   const group = svg.querySelector(`[data-placement-id="${CSS.escape(placement.id)}"]`);
   if (!group) return;
 
-  const rect = toRect(placement);
-  const box = toViewRect(bedOfSvg(svg), rect);
+  const box = toViewRect(bedOfSvg(svg), toRect(placement));
   const frame = group.querySelector('rect');
-  const [nameText, sizeText] = group.querySelectorAll('text');
+  const label = group.querySelector('text');
 
   frame.setAttribute('x', box.x);
   frame.setAttribute('y', box.y);
   frame.setAttribute('width', box.w);
   frame.setAttribute('height', box.h);
 
-  const fontSize = Number(nameText.getAttribute('font-size'));
-  nameText.setAttribute('x', box.x + box.w / 2);
-  nameText.setAttribute('y', box.y + box.h / 2);
-  if (sizeText) {
-    sizeText.setAttribute('x', box.x + box.w / 2);
-    sizeText.setAttribute('y', box.y + box.h / 2 + fontSize * 1.15);
-    sizeText.textContent = `${rect.w}×${rect.d}`;
+  // ドラッグ中は大きさが変わらないので、文字サイズと向きはそのままでよい。
+  // 寝かせてある場合だけ、回転の中心も一緒に動かす。
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  label.setAttribute('x', cx);
+  label.setAttribute('y', cy);
+  if (label.hasAttribute('transform')) {
+    label.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
   }
 }
 
