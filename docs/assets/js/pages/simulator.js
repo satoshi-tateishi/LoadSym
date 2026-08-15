@@ -34,13 +34,26 @@ import { downloadSvgAsPng } from '../export-png.js';
 const TARGET_STAGE_HEIGHT = 330;
 /** スナップが効き始める画面上の距離(px)。実寸mmには描画倍率をかけて換算する。 */
 const SNAP_PIXELS = 12;
+/**
+ * 通知を出しておく時間(ms)。
+ * 通知は荷台に重ねて出すので、居座らせると図を隠してしまう。操作直後にしか
+ * 意味のない情報なので、読める程度の時間だけ出して自動的に消す。
+ */
+const NOTICE_MS = 5000;
 
 export function simulator() {
   return {
     loading: true,
     saving: false,
     errorMessage: '',
+    /** 操作の結果を知らせる一時的なメッセージ。荷台に重ねて出し、自動的に消える。 */
     noticeMessage: '',
+    noticeTimer: null,
+    /**
+     * 画面の状態を説明する居座り型のメッセージ（読み取り専用など）。
+     * 一時的な通知と違って消えては困るので、重ねずに通常のフローへ置く。
+     */
+    stateMessage: '',
 
     session: null,
     profile: null,
@@ -542,9 +555,17 @@ export function simulator() {
       this.renderAll();
     },
 
-    /** 通知バナーに出す。空文字を渡すと消える。 */
+    /**
+     * 通知を出す。空文字を渡すと消える。
+     * 荷台に重ねて表示するため、放置せず NOTICE_MS 後に自動で消す。
+     */
     notice(message) {
+      clearTimeout(this.noticeTimer);
       this.noticeMessage = message;
+      if (!message) return;
+      this.noticeTimer = setTimeout(() => {
+        this.noticeMessage = '';
+      }, NOTICE_MS);
     },
 
     /** 設定できる範囲へ丸める。手入力とDBの想定外の値の両方を受け止める。 */
@@ -825,7 +846,7 @@ export function simulator() {
         this.layoutNote = dialog.note;
         this.layoutOwnerId = this.session.user.id;
         this.saveDialog = null;
-        this.noticeMessage = '保存しました。';
+        this.notice('保存しました。');
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
@@ -846,7 +867,9 @@ export function simulator() {
       // 他人のレイアウトは編集できない（RLSでも弾かれる）。読み取り専用で開く。
       if (row.user_id !== this.session.user.id) {
         this.readOnly = true;
-        this.noticeMessage = '他のユーザーのレイアウトです。編集するには「別のレイアウトとして保存」してください。';
+        // これは操作の結果ではなく画面の状態なので、消えないほうを使う。
+        this.stateMessage =
+          '他のユーザーのレイアウトです。編集するには「別のレイアウトとして保存」してください。';
       }
 
       // 機材置き場が導入される前に保存されたレイアウトにはスロット0が無い。

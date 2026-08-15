@@ -47,55 +47,71 @@
       </div>
     </div>
 
+    <!-- エラーと状態の説明は消えては困るので通常のフローに置く。
+         一時的な通知だけは荷台に重ねる（下のオーバーレイ）。 -->
     <p x-show="errorMessage" x-text="errorMessage"
-       class="mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2"></p>
-    <p x-show="noticeMessage" x-text="noticeMessage"
-       class="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2"></p>
+       class="mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 print-hidden"></p>
+    <p x-show="stateMessage" x-text="stateMessage"
+       class="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 print-hidden"></p>
 
     <p x-show="truckSlots.length === 0 && !loading" class="text-sm text-gray-500 bg-white rounded border p-6 text-center mb-3">
       右の「トラック」タブから車両を選んで読み込んでください（最大3台）。<br>
       先に下の<span class="font-bold">機材置き場</span>へ必要な機材を並べておくこともできます。
     </p>
 
-    <!-- トラック（横向き・縦に積む） -->
-    <div class="space-y-3">
-      <template x-for="slot in truckSlots" :key="slot.slot">
-        <div class="bg-white rounded border p-2"
-             :class="dropTarget === slot.slot ? 'ring-2 ring-blue-400'
-                     : activeSlot === slot.slot ? 'ring-2 ring-blue-600' : ''"
-             @pointerdown="activeSlot = slot.slot">
-          <!-- 集計はSVGの上に一列で並べる。荷台が横長なので縦の場所を節約したい -->
-          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[11px]"
-               x-data="{ s: null }" x-effect="s = summaryOf(slot)">
-            <span class="text-xs font-bold" x-text="slot.truck.name"></span>
-            <template x-if="s">
-              <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span><span class="text-gray-500">配置率</span>
-                  <span class="tabular-nums ml-1" x-text="(s.floorAreaRatio * 100).toFixed(1) + ' %'"></span></span>
-                <span><span class="text-gray-500">機材</span>
-                  <span class="tabular-nums ml-1" x-text="s.placementCount + ' 点'"></span></span>
-                <span :class="s.overPayload ? 'text-red-600 font-bold' : ''">
-                  <span class="text-gray-500">総重量</span>
-                  <span class="tabular-nums ml-1"
-                        x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></span></span>
-                <!-- 収まらない操作は成立しないので、通常の配置操作では赤くならない。
-                     主に「クリアランス設定を広げて、確保できていない機材が出た」ときに点く。 -->
-                <span x-show="s.invalidCount" class="text-red-600 font-bold"
-                      title="荷台からのはみ出しと、クリアランス不足（壁・障害物・他の機材との隙間が設定値に満たない）の合計です。"
-                      x-text="`要確認 ${s.invalidCount} 点`"></span>
-                <span x-show="s.overHeightCount" class="text-amber-700"
-                      x-text="`高さ超過 ${s.overHeightCount} 点`"></span>
-              </div>
-            </template>
-            <button type="button" class="ml-auto text-[10px] text-red-600 hover:underline print-hidden"
-                    x-show="!readOnly" @click="removeSlot(slot.slot)">外す</button>
-          </div>
+    <!-- トラックブロック。通知をこの下端に重ねるため relative にする。
+         space-y-3 の中に絶対配置の子を混ぜると兄弟マージンの対象になるので、外側で囲む。 -->
+    <div class="relative">
+      <div class="space-y-3">
+        <template x-for="slot in truckSlots" :key="slot.slot">
+          <div class="bg-white rounded border p-2"
+               :class="dropTarget === slot.slot ? 'ring-2 ring-blue-400'
+                       : activeSlot === slot.slot ? 'ring-2 ring-blue-600' : ''"
+               @pointerdown="activeSlot = slot.slot">
+            <!-- 集計はSVGの上に一列で並べる。荷台が横長なので縦の場所を節約したい -->
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[11px]"
+                 x-data="{ s: null }" x-effect="s = summaryOf(slot)">
+              <span class="text-xs font-bold" x-text="slot.truck.name"></span>
+              <template x-if="s">
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span><span class="text-gray-500">配置率</span>
+                    <span class="tabular-nums ml-1" x-text="(s.floorAreaRatio * 100).toFixed(1) + ' %'"></span></span>
+                  <span><span class="text-gray-500">機材</span>
+                    <span class="tabular-nums ml-1" x-text="s.placementCount + ' 点'"></span></span>
+                  <span :class="s.overPayload ? 'text-red-600 font-bold' : ''">
+                    <span class="text-gray-500">総重量</span>
+                    <span class="tabular-nums ml-1"
+                          x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></span></span>
+                  <!-- 収まらない操作は成立しないので、通常の配置操作では赤くならない。
+                       主に「クリアランス設定を広げて、確保できていない機材が出た」ときに点く。 -->
+                  <span x-show="s.invalidCount" class="text-red-600 font-bold"
+                        title="荷台からのはみ出しと、クリアランス不足（壁・障害物・他の機材との隙間が設定値に満たない）の合計です。"
+                        x-text="`要確認 ${s.invalidCount} 点`"></span>
+                  <span x-show="s.overHeightCount" class="text-amber-700"
+                        x-text="`高さ超過 ${s.overHeightCount} 点`"></span>
+                </div>
+              </template>
+              <button type="button" class="ml-auto text-[10px] text-red-600 hover:underline print-hidden"
+                      x-show="!readOnly" @click="removeSlot(slot.slot)">外す</button>
+            </div>
 
-          <svg class="simulator-stage block border border-gray-200"
-               :style="stageStyle(slot)" :data-slot="slot.slot"
-               @pointerdown="onStagePointerDown($event, slot)"></svg>
-        </div>
-      </template>
+            <svg class="simulator-stage block border border-gray-200"
+                 :style="stageStyle(slot)" :data-slot="slot.slot"
+                 @pointerdown="onStagePointerDown($event, slot)"></svg>
+          </div>
+        </template>
+      </div>
+
+      <!-- 操作の結果を知らせる一時的な通知。
+           通常のフローに置くと、表示・非表示のたびに下の荷台がずれて読みにくい。
+           荷台SVGは下端に420mm相当の余白（尺規とキャプションだけの帯）があるので、
+           トラックの下端に重ねれば図をほとんど隠さない。数秒で自動的に消える。 -->
+      <div x-show="noticeMessage" x-transition.opacity.duration.150ms
+           class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center px-2 pb-1 print-hidden">
+        <p x-text="noticeMessage"
+           class="pointer-events-auto rounded border border-amber-300 bg-amber-50/95 px-3 py-2
+                  text-sm text-amber-800 shadow-md"></p>
+      </div>
     </div>
 
     <!-- 機材置き場（トラックの下・幅いっぱい） -->
