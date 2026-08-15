@@ -6,11 +6,19 @@
 import { initAuthenticatedPage } from '../layout.js';
 import { translateError } from '../error-messages.js';
 import { listUsers, updateUser } from '../admin-users.js';
-import { listCategories, createCategory, updateCategory, deleteCategory, countEquipmentsByCategory }
-  from '../categories.js';
+import {
+  listCategories, createCategory, updateCategory, deleteCategory, countEquipmentsByCategory,
+  updateCategoryOrder
+} from '../categories.js';
 import { listEquipments, createEquipment, updateEquipment, deleteEquipment, createEquipments }
   from '../equipments.js';
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
+
+// iOS Safariはドラッグハンドルへのtouchstartを配信しないため、SortableJSでの
+// ドラッグ並び替えはPC/Mac相当の入力デバイスに限定し、タッチ環境では↑↓ボタンを使う。
+// 画面幅だけで判定すると横向きiPadのような広いタッチ端末も含んでしまうので、
+// hover/pointer でマウス・トラックパッド操作かどうかも合わせて見る。
+const DESKTOP_QUERY = '(min-width: 768px) and (hover: hover) and (pointer: fine)';
 
 export function admin() {
   return {
@@ -32,7 +40,17 @@ export function admin() {
     equipmentForm: null,
     importPreview: null,
 
+    isDesktop: false,
+    sortableInstance: null,
+
     async init() {
+      const desktopQuery = window.matchMedia(DESKTOP_QUERY);
+      this.isDesktop = desktopQuery.matches;
+      desktopQuery.addEventListener('change', (event) => {
+        this.isDesktop = event.matches;
+        this.$nextTick(() => this.syncSortable());
+      });
+
       const context = await initAuthenticatedPage();
       if (!context) return;
 
@@ -51,6 +69,7 @@ export function admin() {
         this.errorMessage = translateError(error);
       } finally {
         this.loading = false;
+        this.$nextTick(() => this.syncSortable());
       }
     },
 
@@ -156,21 +175,69 @@ export function admin() {
       }
     },
 
-    /** 並び順を1つ入れ替える。sort_order を直接編集させるより誤りが少ない。 */
+    /**
+     * ↑↓ボタンで1つ入れ替える。タッチ環境ではこちらが唯一の並び替え手段になる。
+     * 表示中の並びをそのまま採番し直すので、ドラッグ並び替えと結果が揃う。
+     */
     async moveCategory(category, direction) {
       const index = this.categories.findIndex((item) => item.id === category.id);
-      const swapWith = this.categories[index + direction];
-      if (!swapWith) return;
+      const target = index + direction;
+      if (target < 0 || target >= this.categories.length) return;
+
+      const reordered = [...this.categories];
+      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      await this.persistOrder(reordered);
+    },
+
+    /** PC/Mac相当の入力デバイスのときだけドラッグ並び替えを有効にする。 */
+    syncSortable() {
+      if (this.isDesktop && !this.sortableInstance) {
+        this.initSortable();
+      } else if (!this.isDesktop && this.sortableInstance) {
+        this.sortableInstance.destroy();
+        this.sortableInstance = null;
+      }
+    },
+
+    initSortable() {
+      const container = document.getElementById('category-list');
+      if (!container || typeof Sortable === 'undefined') return;
+
+      // oldIndex/newIndex は信用せず、ドロップ後のDOMの実並び（data-id）を正とする。
+      // SortableJSがDOMを動かした結果とAlpineの再描画がずれるのを避けるため、
+      // 並べ替えたデータをそのまま代入してAlpineに追従させる。
+      this.sortableInstance = new Sortable(container, {
+        animation: 150,
+        handle: '.drag-handle',
+        ghostClass: 'opacity-40',
+        onEnd: async () => {
+          const orderedIds = Array.from(container.children).map((row) => row.dataset.id);
+          const byId = new Map(this.categories.map((category) => [category.id, category]));
+          const reordered = orderedIds.map((id) => byId.get(id)).filter(Boolean);
+          if (reordered.length !== this.categories.length) return;
+
+          const changed = reordered.some((category, index) => category.id !== this.categories[index].id);
+          if (!changed) return;
+
+          await this.persistOrder(reordered);
+        }
+      });
+    },
+
+    /** 画面の並びを確定してDBへ反映する。失敗したらサーバーの状態に戻す。 */
+    async persistOrder(reordered) {
+      const previous = this.categories;
+      this.categories = reordered;
 
       this.saving = true;
       this.errorMessage = '';
       try {
-        await updateCategory(category.id, { sort_order: swapWith.sort_order });
-        await updateCategory(swapWith.id, { sort_order: category.sort_order });
+        await updateCategoryOrder(reordered.map((category) => category.id));
         await this.reload();
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
+        this.categories = previous;
       } finally {
         this.saving = false;
       }
