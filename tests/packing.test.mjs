@@ -82,7 +82,7 @@ console.log('# rotatePlacement');
   eq('回転角が90度になる', byId.p2.rotation, 90);
   eq('回転した機材は動かない', { x: byId.p2.x, y: byId.p2.y }, { x: 420, y: 10 });
   // p2は回転後 600x400。右端は 420+600=1020 なので p3 は 1030 へ押される
-  eq('右隣が押し出される', byId.p3.x, 1030);
+  eq('右隣が押し出される', byId.p3.x, 1025);
   eq('左隣は押されない', byId.p1.x, 10);
   eq('収束する', truncated, false);
 }
@@ -93,7 +93,7 @@ console.log('# movePlacement');
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 800, y: 800, rotation: 0 }
   ]);
   const { placements } = movePlacement(slot, 'p1', { x: 4, y: 3 }, 60);
-  eq('壁にスナップする', { x: placements[0].x, y: placements[0].y }, { x: 10, y: 10 });
+  eq('壁にスナップする', { x: placements[0].x, y: placements[0].y }, { x: 5, y: 5 });
 }
 {
   // 障害物（タイヤハウス）の上には物理的に置けない。赤くして見せるのではなく、
@@ -149,7 +149,8 @@ console.log('# createPlacement');
     slot,
     () => `new${++n}`
   );
-  eq('既存機材と重ならない位置に置かれる', created.x >= 420 || created.y >= 620, true);
+  eq('既存機材と重ならない位置に置かれる',
+    summarize({ ...slot, placements: [...slot.placements, created] }).invalidCount, 0);
   eq('回転は0で作られる', created.rotation, 0);
   eq('スナップショットを持つ', created.snapshot.name, 'B');
 }
@@ -193,12 +194,12 @@ console.log('# movePlacementToSlot（エリア間移動）');
   eq('移動先に追加される', r.target.length, 2);
 
   const moved = r.target.find((p) => p.id === 'p1');
-  eq('移動先で壁にスナップする', { x: moved.x, y: moved.y }, { x: 10, y: 10 });
+  eq('移動先で壁にスナップする', { x: moved.x, y: moved.y }, { x: 5, y: 5 });
 
   // p1(700x500) の下へ押し出される。右へ逃がすより移動量が小さいため。
   const pushed = r.target.find((p) => p.id === 't1');
-  eq('先客が押し出される', { x: pushed.x, y: pushed.y }, { x: 10, y: 520 });
-  eq('クリアランス10mm', pushed.y - (moved.y + 500), 10);
+  eq('先客が押し出される', { x: pushed.x, y: pushed.y }, { x: 10, y: 510 });
+  eq('既定のクリアランス', pushed.y - (moved.y + 500), 5);
   eq('重なりが残らない', summarize({ ...truck, placements: r.target }).invalidCount, 0);
   eq('収束する', r.truncated, false);
 }
@@ -242,7 +243,7 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
   const r = rotatePlacement(slot, 'p1');
   eq('収まるなら回転できる', r.rejected, false);
   eq('回転が反映される', r.placements.find((p) => p.id === 'p1').rotation, 90);
-  eq('隣が押し出される', r.placements.find((p) => p.id === 'p2').x, 620);
+  eq('隣が押し出される', r.placements.find((p) => p.id === 'p2').x, 615);
   eq('押し出し後もエラーなし', summarize({ ...slot, placements: r.placements }).invalidCount, 0);
 }
 {
@@ -272,12 +273,15 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 }
   ]);
   const placement = slot.placements[0];
-  eq('右の壁で止まる', clampToBed({ ...placement, x: 9999, y: 10 }, slot).x, 1700 - 400);
-  eq('後ろの壁で止まる', clampToBed({ ...placement, x: 10, y: 9999 }, slot).y, 4400 - 600);
-  eq('左の壁で止まる', clampToBed({ ...placement, x: -500, y: 10 }, slot).x, 0);
+  // 壁からクリアランスぶん内側で止まる（既定5mm）
+  eq('右の壁で止まる', clampToBed({ ...placement, x: 9999, y: 10 }, slot).x, 1700 - 400 - 5);
+  eq('後ろの壁で止まる', clampToBed({ ...placement, x: 10, y: 9999 }, slot).y, 4400 - 600 - 5);
+  eq('左の壁で止まる', clampToBed({ ...placement, x: -500, y: 10 }, slot).x, 5);
+  eq('クリアランスを変えると止まる位置も変わる',
+    clampToBed({ ...placement, x: 9999, y: -500 }, slot, 1), { x: 1700 - 400 - 1, y: 1 });
   // 回転後の外形で判定する（幅と奥行きが入れ替わる）
   const turned = { ...placement, rotation: 90, x: 9999, y: 9999 };
-  eq('回転後の外形で止まる', clampToBed(turned, slot), { x: 1700 - 600, y: 4400 - 400 });
+  eq('回転後の外形で止まる', clampToBed(turned, slot), { x: 1700 - 600 - 5, y: 4400 - 400 - 5 });
 }
 {
   // 荷台より大きい機材は上限が負になる。左前の角に寄せる。
@@ -323,6 +327,62 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
   eq('収まらない移動は棄却する', r.rejected, true);
   eq('移動元に留まる', r.source.length, 1);
   eq('移動先には増えない', r.target.length, 0);
+}
+
+console.log('# クリアランス設定');
+{
+  // 押し出し先の隙間が設定値に従う。packing 層まで値が届いていることの確認。
+  const make = () => makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 420, y: 10, rotation: 0 }
+  ]);
+  const wide = rotatePlacement(make(), 'p1', 10);
+  const tight = rotatePlacement(make(), 'p1', 1);
+  eq('10mmなら10mm空けて押し出す', wide.placements.find((p) => p.id === 'p2').x, 620);
+  eq('1mmなら1mm空けて押し出す', tight.placements.find((p) => p.id === 'p2').x, 611);
+  eq('どちらもエラーは残らない', [
+    summarize({ ...make(), placements: wide.placements }).invalidCount,
+    summarize({ ...make(), placements: tight.placements }).invalidCount
+  ], [0, 0]);
+}
+{
+  // 設定を広げても、既に置いてある機材は動かさない。
+  // 動かすと保存済みの図が勝手に変わってしまう。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 415, y: 10, rotation: 0 }
+  ]);
+  eq('5mm間隔の既存配置はエラーにならない', summarize(slot).invalidCount, 0);
+
+  // 触っていない機材を巻き込まないので、10mm設定でも移動は通る
+  const r = movePlacement(slot, 'p1', { x: 10, y: 700 }, 0, 10);
+  eq('設定を広げても既存配置は棄却しない', r.rejected, false);
+  eq('動かしていない機材はそのまま', r.placements.find((p) => p.id === 'p2').x, 415);
+}
+{
+  // 重なり0は不可。最低クリアランスを下回る移動は棄却する。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 1000, y: 10, rotation: 0 }
+  ]);
+  // p1 の右端(410)にぴったり接する位置へ、スナップを切って動かす。
+  // 接触は許されないが、隣を押しのける余地があるので棄却ではなく押し出しで解消する。
+  const touching = movePlacement(slot, 'p2', { x: 410, y: 10 }, 0, 1);
+  eq('接する移動は押し出しで解消する', touching.rejected, false);
+  const [p1, p2] = ['p1', 'p2'].map((id) => touching.placements.find((p) => p.id === id));
+  eq('動かした機材は要求どおりの位置', p2.x, 410);
+  eq('隣が1mm押しのけられる', p2.x - (p1.x + 400), 1);
+  eq('接触が残らない', summarize({ ...slot, placements: touching.placements }).invalidCount, 0);
+
+  // 押しのける余地がなければ棄却される。
+  // 機材2つでちょうど埋まる荷台なので、隣はどちらへ逃げても荷台外に出る。
+  const cornered = makeBed(810, 700, [
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 0, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 410, y: 10, rotation: 0 }
+  ]);
+  const r = movePlacement(cornered, 'p2', { x: 400, y: 10 }, 0, 1);
+  eq('逃げ場がなければ棄却する', r.rejected, true);
+  eq('位置は元のまま', r.placements.find((p) => p.id === 'p2').x, 410);
 }
 
 console.log('# 空きが無いときは置かない');

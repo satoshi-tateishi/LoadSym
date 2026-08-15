@@ -10,8 +10,10 @@
 //   }
 //   snapshot = { name, widthMm, depthMm, heightMm, weightKg, color }
 
-import { toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, findFreeSpot }
-  from './geometry.js';
+import {
+  toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, findFreeSpot,
+  DEFAULT_CLEARANCE_MM
+} from './geometry.js';
 
 // 機材置き場（ステージングエリア）の寸法。
 // 「その現場に必要な機材を先に並べてから積む」という実際の作業手順を画面上でも
@@ -75,7 +77,7 @@ export function placementRects(slot) {
  * 機材置き場は素通しする。ここは積み込み前の作業台で、収まらない機材の逃がし先を
  * 兼ねているため、壁で止めると置き場所が無くなって操作に詰まる。
  */
-export function clampToBed(placement, slot) {
+export function clampToBed(placement, slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const x = Math.round(placement.x);
   const y = Math.round(placement.y);
   if (isStaging(slot)) return { x, y };
@@ -83,14 +85,19 @@ export function clampToBed(placement, slot) {
   const bed = bedOf(slot);
   const rect = toRect(placement);
   return {
-    x: clampAxis(x, bed.w - rect.w),
-    y: clampAxis(y, bed.d - rect.d)
+    x: clampAxis(x, bed.w - rect.w, clearanceMm),
+    y: clampAxis(y, bed.d - rect.d, clearanceMm)
   };
 }
 
-/** 荷台より大きい機材では上限が負になる。そのときは左前の角(0)に寄せる。 */
-function clampAxis(value, max) {
-  return Math.max(0, Math.min(value, Math.max(max, 0)));
+/**
+ * 壁からクリアランスぶん内側の範囲へ丸める。
+ * 荷台の幅いっぱいに近い機材ではその範囲が消える（下限が上限を上回る）ので、
+ * そのときはクリアランスを諦めて荷台内に収めることを優先する。
+ */
+function clampAxis(value, max, clearanceMm) {
+  if (max - clearanceMm < clearanceMm) return Math.max(0, Math.min(value, Math.max(max, 0)));
+  return Math.max(clearanceMm, Math.min(value, max - clearanceMm));
 }
 
 /**
@@ -99,9 +106,11 @@ function clampAxis(value, max) {
  * 作らせないという方針に反するため、呼び出し側で「置けなかった」と伝えさせる。
  * 機材置き場だけは作業台なので、空きが無くても左前に置く。
  */
-export function createPlacement(equipment, slot, idFactory) {
+export function createPlacement(equipment, slot, idFactory, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const size = { w: equipment.width_mm, d: equipment.depth_mm };
-  const free = findFreeSpot(size, placementRects(slot), bedOf(slot), obstacleRects(slot));
+  const free = findFreeSpot(
+    size, placementRects(slot), bedOf(slot), obstacleRects(slot), clearanceMm
+  );
   if (!free && !isStaging(slot)) return null;
   const spot = free ?? { x: 10, y: 10 };
 
@@ -126,7 +135,7 @@ export function createPlacement(equipment, slot, idFactory) {
  * 配置を複製する。斜めにずらすだけでは荷台の後端にある機材が必ずはみ出すので、
  * createPlacement と同じように空きを探して置く。空きが無ければ null を返す。
  */
-export function duplicatePlacement(slot, placementId, idFactory) {
+export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const source = slot.placements.find((placement) => placement.id === placementId);
   if (!source) return null;
 
@@ -135,7 +144,8 @@ export function duplicatePlacement(slot, placementId, idFactory) {
     { w: rect.w, d: rect.d },
     placementRects(slot),
     bedOf(slot),
-    obstacleRects(slot)
+    obstacleRects(slot),
+    clearanceMm
   );
   if (!free && !isStaging(slot)) return null;
   const spot = free ?? { x: 10, y: 10 };
@@ -155,8 +165,8 @@ export function duplicatePlacement(slot, placementId, idFactory) {
  * @param {number} thresholdMm スナップの効く距離（ズーム率に応じて呼び出し側が決める）
  * @returns {{placements: Array, truncated: boolean, rejected: boolean}}
  */
-export function movePlacement(slot, placementId, position, thresholdMm) {
-  return applyMove(slot, slot, placementId, position, thresholdMm);
+export function movePlacement(slot, placementId, position, thresholdMm, clearanceMm = DEFAULT_CLEARANCE_MM) {
+  return applyMove(slot, slot, placementId, position, thresholdMm, clearanceMm);
 }
 
 /**
@@ -164,7 +174,7 @@ export function movePlacement(slot, placementId, position, thresholdMm) {
  * 別エリアから移してきた場合、slot には移動中の機材が既に足されているため、
  * それを含まない before と比べないと、着地した時点で不正でも棄却できない。
  */
-function applyMove(slot, before, placementId, position, thresholdMm) {
+function applyMove(slot, before, placementId, position, thresholdMm, clearanceMm) {
   const moving = slot.placements.find((placement) => placement.id === placementId);
   if (!moving) return { placements: slot.placements, truncated: false, rejected: false };
 
@@ -178,14 +188,15 @@ function applyMove(slot, before, placementId, position, thresholdMm) {
     { id: placementId, x: position.x, y: position.y, w: size.w, d: size.d },
     others,
     bedOf(slot),
-    thresholdMm
+    thresholdMm,
+    clearanceMm
   );
 
   const updated = slot.placements.map((placement) =>
     placement.id === placementId ? { ...placement, x: snapped.x, y: snapped.y } : placement
   );
 
-  return settle({ ...slot, placements: updated }, before, placementId, null);
+  return settle({ ...slot, placements: updated }, before, placementId, null, clearanceMm);
 }
 
 /**
@@ -196,7 +207,9 @@ function applyMove(slot, before, placementId, position, thresholdMm) {
  *   それぞれ移動元・移動先の新しい placements 配列。
  *   移動先に収まらない場合は棄却し、両方とも元のまま返す（移動元に留まる）。
  */
-export function movePlacementToSlot(sourceSlot, targetSlot, placementId, position, thresholdMm) {
+export function movePlacementToSlot(
+  sourceSlot, targetSlot, placementId, position, thresholdMm, clearanceMm = DEFAULT_CLEARANCE_MM
+) {
   const moving = sourceSlot.placements.find((placement) => placement.id === placementId);
   if (!moving) {
     return {
@@ -211,7 +224,7 @@ export function movePlacementToSlot(sourceSlot, targetSlot, placementId, positio
   const landed = { ...moving, x: Math.round(position.x), y: Math.round(position.y) };
   const staged = { ...targetSlot, placements: [...targetSlot.placements, landed] };
 
-  const result = applyMove(staged, targetSlot, placementId, position, thresholdMm);
+  const result = applyMove(staged, targetSlot, placementId, position, thresholdMm, clearanceMm);
   if (result.rejected) {
     return {
       source: sourceSlot.placements,
@@ -231,7 +244,7 @@ export function movePlacementToSlot(sourceSlot, targetSlot, placementId, positio
  * 隣接する機材を押し出すのは許すが、押し出した結果まで含めて荷台に収まる場合だけ。
  * 収まらなければ回転を棄却するので、向きも位置も元のまま返る。
  */
-export function rotatePlacement(slot, placementId) {
+export function rotatePlacement(slot, placementId, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const target = slot.placements.find((placement) => placement.id === placementId);
   if (!target) return { placements: slot.placements, truncated: false, rejected: false };
 
@@ -244,7 +257,7 @@ export function rotatePlacement(slot, placementId) {
   );
 
   const preferredAxis = after.w > before.w ? 'x' : after.d > before.d ? 'y' : null;
-  return settle({ ...slot, placements: updated }, slot, placementId, preferredAxis);
+  return settle({ ...slot, placements: updated }, slot, placementId, preferredAxis, clearanceMm);
 }
 
 /**
@@ -252,12 +265,12 @@ export function rotatePlacement(slot, placementId) {
  * 障害物も固定側に含めるため、機材が障害物を押しのけることはない。
  * 収束後に判定し、収まらなければ操作前（before）の配置をそのまま返す。
  */
-function settle(slot, before, pinnedPlacementId, preferredAxis) {
+function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
   const obstacles = obstacleRects(slot);
   const rects = [...placementRects(slot), ...obstacles];
   const pinnedIds = [pinnedPlacementId, ...obstacles.map((rect) => rect.id)];
 
-  const resolved = resolveOverlaps(rects, pinnedIds, bedOf(slot), { preferredAxis });
+  const resolved = resolveOverlaps(rects, pinnedIds, bedOf(slot), { preferredAxis, clearanceMm });
   const byId = new Map(resolved.rects.map((rect) => [rect.id, rect]));
 
   const placements = slot.placements.map((placement) => {

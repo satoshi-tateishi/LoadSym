@@ -40,7 +40,7 @@ export async function loadLayout(id) {
   const { data, error } = await supabase
     .from('layouts')
     .select(
-      `id, user_id, name, note,
+      `id, user_id, name, note, clearance_mm,
        layout_trucks (
          id, slot, truck_id, truck_snapshot,
          placements (id, equipment_id, equipment_snapshot, x_mm, y_mm, rotation, stack_level)
@@ -60,7 +60,7 @@ export async function deleteLayout(id) {
 
 /**
  * レイアウトを保存する。idを渡せば上書き、渡さなければ新規作成。
- * @param {{id?: string, name: string, note?: string, slots: Array}} layout
+ * @param {{id?: string, name: string, note?: string, clearanceMm: number, slots: Array}} layout
  * @param {string} userId
  * @returns {string} 保存したレイアウトのid
  */
@@ -117,7 +117,12 @@ export async function saveLayout(layout, userId) {
 async function insertLayoutRow(layout, userId) {
   const { data, error } = await supabase
     .from('layouts')
-    .insert({ name: layout.name, note: layout.note ?? null, user_id: userId })
+    .insert({
+      name: layout.name,
+      note: layout.note ?? null,
+      clearance_mm: layout.clearanceMm,
+      user_id: userId
+    })
     .select('id')
     .single();
 
@@ -128,7 +133,7 @@ async function insertLayoutRow(layout, userId) {
 async function updateLayoutRow(layout) {
   const { data, error } = await supabase
     .from('layouts')
-    .update({ name: layout.name, note: layout.note ?? null })
+    .update({ name: layout.name, note: layout.note ?? null, clearance_mm: layout.clearanceMm })
     .eq('id', layout.id)
     .select('id')
     .single();

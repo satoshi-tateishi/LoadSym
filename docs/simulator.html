@@ -21,6 +21,18 @@
       <h2 class="font-bold text-sm" x-text="layoutName || '無題のレイアウト'"></h2>
       <span class="text-xs text-gray-500" x-show="readOnly">（読み取り専用）</span>
       <div class="ml-auto flex items-center gap-1">
+        <!-- クリアランスはスナップの吸着先を決める値。変えても既に置いた機材は動かない。 -->
+        <label class="flex items-center gap-1 text-xs text-gray-600 mr-1"
+               title="機材どうし・機材と壁の間に確保する隙間です。スナップと押し出しの目標値で、既に置いた機材は動きません。">
+          <span>クリアランス</span>
+          <input type="number" inputmode="numeric"
+                 class="w-14 border rounded px-1 py-1 text-xs text-right tabular-nums disabled:opacity-30"
+                 :min="clearanceRange.min" :max="clearanceRange.max" step="1"
+                 :disabled="readOnly"
+                 :value="clearanceMm"
+                 @change="setClearance($event.target.value); $event.target.value = clearanceMm">
+          <span>mm</span>
+        </label>
         <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
                 :disabled="!canUndo || readOnly" @click="undo()">元に戻す</button>
         <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"

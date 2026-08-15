@@ -4,8 +4,27 @@
 //
 // 座標系: 荷台の左前を原点(0,0)、xが幅方向、yが奥行き方向。単位はすべて整数mm。
 
-/** 壁面および他オブジェクトとの間に確保するクリアランス(mm)。 */
-export const CLEARANCE_MM = 10;
+// クリアランス（壁面および他オブジェクトとの間に確保する隙間）はレイアウトごとの
+// 設定で、この層では引数として受け取る。既定値だけをここに持つ。
+//
+// 2種類あることに注意すること。
+//   設定値      … スナップの吸着先・押し出し先・空き探索が目標にする隙間。1〜10mm。
+//   MIN_CLEARANCE_MM … これを下回るとエラー扱いにする下限。設定値とは独立。
+//
+// 下限を別に持つのは、設定値を10mmにしたときに「7mmまで詰めた配置」まで
+// エラーにしてしまうと、矢印キーでの微調整ができなくなるため。設定値は
+// 「放っておくとここに吸い付く」値で、下限は「これ以上は物理的に無理」の線。
+/** クリアランスの既定値(mm)。 */
+export const DEFAULT_CLEARANCE_MM = 5;
+/** ユーザーが設定できるクリアランスの範囲(mm)。 */
+export const MIN_SETTING_CLEARANCE_MM = 1;
+export const MAX_SETTING_CLEARANCE_MM = 10;
+/**
+ * これを下回る隙間はエラーにする(mm)。
+ * 0mm（機材どうしが完全に接する）を許すと、手も吊りベルトも入らず実際には
+ * 積めない図ができてしまう。
+ */
+export const MIN_CLEARANCE_MM = 1;
 
 /** 連鎖押し出しの反復上限。密に詰まった状態で振動して止まらなくなるのを防ぐ。 */
 const MAX_PUSH_ITERATIONS = 100;
@@ -64,27 +83,29 @@ export function isInsideBed(rect, bed) {
  * という動きのほうが実際の積み込み作業の感覚に近いため。
  *
  * 候補は3種類:
- *   1. 壁面    … 壁からCLEARANCE_MM離れた位置
- *   2. 隣接    … 既存矩形の外側にCLEARANCE_MM空けて接する位置
+ *   1. 壁面    … 壁からクリアランスぶん離れた位置
+ *   2. 隣接    … 既存矩形の外側にクリアランスぶん空けて接する位置
  *   3. 整列    … 既存矩形と辺を揃える位置（この候補だけクリアランスを取らない）
  *
  * @param {{x:number,y:number,w:number,d:number}} moving ドラッグ中の矩形（素の位置）
  * @param {Array} others 既に置かれている矩形と障害物
  * @param {{w:number,d:number}} bed 荷台内寸
  * @param {number} thresholdMm この距離以内の候補にだけ吸着する
+ * @param {number} clearanceMm 吸着先で確保する隙間。しきい値とは別物なので混同しないこと
+ *   （しきい値は画面px基準でズームに追従させ、こちらは実寸mm）。
  */
-export function snapPosition(moving, others, bed, thresholdMm) {
-  const xCandidates = [CLEARANCE_MM, bed.w - moving.w - CLEARANCE_MM];
-  const yCandidates = [CLEARANCE_MM, bed.d - moving.d - CLEARANCE_MM];
+export function snapPosition(moving, others, bed, thresholdMm, clearanceMm = DEFAULT_CLEARANCE_MM) {
+  const xCandidates = [clearanceMm, bed.w - moving.w - clearanceMm];
+  const yCandidates = [clearanceMm, bed.d - moving.d - clearanceMm];
 
   for (const other of others) {
     if (other.id === moving.id) continue;
 
     // 隣接（クリアランスあり）
-    xCandidates.push(other.x - moving.w - CLEARANCE_MM);
-    xCandidates.push(other.x + other.w + CLEARANCE_MM);
-    yCandidates.push(other.y - moving.d - CLEARANCE_MM);
-    yCandidates.push(other.y + other.d + CLEARANCE_MM);
+    xCandidates.push(other.x - moving.w - clearanceMm);
+    xCandidates.push(other.x + other.w + clearanceMm);
+    yCandidates.push(other.y - moving.d - clearanceMm);
+    yCandidates.push(other.y + other.d + clearanceMm);
 
     // 整列（クリアランスなし）
     xCandidates.push(other.x);
@@ -130,13 +151,16 @@ function nearestCandidate(value, candidates, thresholdMm) {
  * @param {Array} rects 全矩形（障害物も pinnedIds に含めて渡す）
  * @param {Array<string>} pinnedIds 動かさない矩形のid
  * @param {{w:number,d:number}} bed 荷台内寸
- * @param {{preferredAxis?: 'x'|'y'}} options 起点の押し出し方向のヒント
- *   （回転で幅が伸びたなら 'x'、奥行きが伸びたなら 'y' を渡す）
+ * @param {{preferredAxis?: 'x'|'y', clearanceMm?: number}} options
+ *   preferredAxis は起点の押し出し方向のヒント
+ *   （回転で幅が伸びたなら 'x'、奥行きが伸びたなら 'y' を渡す）。
+ *   clearanceMm は押し出したあとに空ける隙間。
  * @returns {{rects: Array, moved: boolean, truncated: boolean}}
  *   rects は座標を更新した新しい配列（入力は破壊しない）。
  *   truncated は反復上限で打ち切ったかどうか。
  */
 export function resolveOverlaps(rects, pinnedIds, bed, options = {}) {
+  const clearanceMm = options.clearanceMm ?? DEFAULT_CLEARANCE_MM;
   const working = rects.map((rect) => ({ ...rect }));
   const byId = new Map(working.map((rect) => [rect.id, rect]));
   const pinned = new Set(pinnedIds);
@@ -160,13 +184,14 @@ export function resolveOverlaps(rects, pinnedIds, bed, options = {}) {
     for (const target of working) {
       if (target.id === pusher.id) continue;
       if (pinned.has(target.id)) continue;
-      if (!rectsOverlap(pusher, target, CLEARANCE_MM)) continue;
+      if (!rectsOverlap(pusher, target, clearanceMm)) continue;
 
       const displacement = computePush(pusher, target, {
         lockedAxis: pushDirection.get(target.id),
         preferredAxis: pushDirection.get(pusher.id) ?? options.preferredAxis ?? null,
         bed,
-        pinnedRects
+        pinnedRects,
+        clearanceMm
       });
       if (!displacement) continue;
 
@@ -193,12 +218,12 @@ const PENALTY_AXIS_SWITCH = 1e3;
  *   - 連鎖の向き（preferredAxis）と軸が変わる → 中くらいのペナルティ
  * を加えたもの。既に押し出されている矩形はその軸の候補だけに絞る（振動防止）。
  */
-function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRects }) {
+function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRects, clearanceMm }) {
   const candidates = [
-    { axis: 'x', dx: pusher.x - target.w - CLEARANCE_MM - target.x, dy: 0 },
-    { axis: 'x', dx: pusher.x + pusher.w + CLEARANCE_MM - target.x, dy: 0 },
-    { axis: 'y', dx: 0, dy: pusher.y - target.d - CLEARANCE_MM - target.y },
-    { axis: 'y', dx: 0, dy: pusher.y + pusher.d + CLEARANCE_MM - target.y }
+    { axis: 'x', dx: pusher.x - target.w - clearanceMm - target.x, dy: 0 },
+    { axis: 'x', dx: pusher.x + pusher.w + clearanceMm - target.x, dy: 0 },
+    { axis: 'y', dx: 0, dy: pusher.y - target.d - clearanceMm - target.y },
+    { axis: 'y', dx: 0, dy: pusher.y + pusher.d + clearanceMm - target.y }
   ];
 
   const usable = lockedAxis
@@ -236,20 +261,30 @@ function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRec
 
 /**
  * エラー状態（赤色表示の対象）を判定する。
- * 荷台からはみ出しているもの、障害物と重なっているもの、
- * 他の機材とクリアランス未満まで食い込んでいるものを返す。
+ * 荷台からはみ出しているもの、障害物や他の機材と MIN_CLEARANCE_MM 未満まで
+ * 近づいているものを返す。
+ *
+ * 隙間の判定にレイアウトの設定値ではなく MIN_CLEARANCE_MM を使うのは、設定を
+ * 10mm にしたときに「7mmまで詰めた配置」までエラーになると、矢印キーでの微調整が
+ * できなくなるため。設定値はあくまで吸着先で、ここは物理的な下限を見る。
+ *
+ * 壁との間には隙間を要求しない。機材を壁に寄せて積むのは実作業では普通で、
+ * ドラッグとナッジは clampToBed が設定値ぶん内側で止めるため、通常操作で
+ * 壁ぴったりになることもない。
  *
  * @returns {Set<string>} エラーになった矩形のidの集合
  */
 export function findInvalidRects(rects, bed, obstacles = []) {
   const invalid = new Set();
+  // gap を渡すと「gap未満しか離れていない」ことを重なりとみなす。
+  const gap = MIN_CLEARANCE_MM;
 
   for (const rect of rects) {
     if (!isInsideBed(rect, bed)) {
       invalid.add(rect.id);
     }
     for (const obstacle of obstacles) {
-      if (rectsOverlap(rect, obstacle)) {
+      if (rectsOverlap(rect, obstacle, gap)) {
         invalid.add(rect.id);
       }
     }
@@ -257,7 +292,7 @@ export function findInvalidRects(rects, bed, obstacles = []) {
 
   for (let i = 0; i < rects.length; i++) {
     for (let j = i + 1; j < rects.length; j++) {
-      if (rectsOverlap(rects[i], rects[j])) {
+      if (rectsOverlap(rects[i], rects[j], gap)) {
         invalid.add(rects[i].id);
         invalid.add(rects[j].id);
       }
@@ -278,17 +313,17 @@ export function findInvalidRects(rects, bed, obstacles = []) {
  * 50mm 刻みでは 1160 の次が 1210 で上限を超えるため、2つ目が永久に置けなくなる。
  * 辺を基準にすれば必ず詰めて置ける。
  */
-export function findFreeSpot(size, occupied, bed, obstacles = []) {
+export function findFreeSpot(size, occupied, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
   const blockers = [...occupied, ...obstacles];
-  const xs = edgeCandidates(blockers.map((rect) => rect.x + rect.w));
-  const ys = edgeCandidates(blockers.map((rect) => rect.y + rect.d));
+  const xs = edgeCandidates(blockers.map((rect) => rect.x + rect.w), clearanceMm);
+  const ys = edgeCandidates(blockers.map((rect) => rect.y + rect.d), clearanceMm);
 
   for (const y of ys) {
     if (y + size.d > bed.d) continue;
     for (const x of xs) {
       if (x + size.w > bed.w) continue;
       const candidate = { x, y, w: size.w, d: size.d };
-      const collides = blockers.some((other) => rectsOverlap(candidate, other, CLEARANCE_MM));
+      const collides = blockers.some((other) => rectsOverlap(candidate, other, clearanceMm));
       if (!collides) return { x, y };
     }
   }
@@ -296,7 +331,7 @@ export function findFreeSpot(size, occupied, bed, obstacles = []) {
 }
 
 /** 壁ぎわと各辺の外側を、左前から順に並べた候補にする。 */
-function edgeCandidates(edges) {
-  const values = [CLEARANCE_MM, ...edges.map((edge) => edge + CLEARANCE_MM)];
+function edgeCandidates(edges, clearanceMm) {
+  const values = [clearanceMm, ...edges.map((edge) => edge + clearanceMm)];
   return [...new Set(values.map((value) => Math.round(value)))].sort((a, b) => a - b);
 }

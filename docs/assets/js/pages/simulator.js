@@ -21,6 +21,8 @@ import {
   createPlacement, movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
   createStagingSlot, isStaging, STAGING_SLOT, clampToBed, duplicatePlacement
 } from '../packing.js';
+import { DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM, MAX_SETTING_CLEARANCE_MM }
+  from '../geometry.js';
 import { renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM, viewSize }
   from '../renderer.js';
 import { downloadSvgAsPng } from '../export-png.js';
@@ -54,6 +56,13 @@ export function simulator() {
     truckQuery: '',
 
     slots: [],
+    /**
+     * 機材どうし・機材と壁の間に確保する隙間(mm)。レイアウトごとの設定で保存する。
+     * スナップの吸着先と押し出し先を決める値であって、既に置いた機材を動かすものでは
+     * ないため、あとから変えても図は崩れない。
+     */
+    clearanceMm: DEFAULT_CLEARANCE_MM,
+    clearanceRange: { min: MIN_SETTING_CLEARANCE_MM, max: MAX_SETTING_CLEARANCE_MM },
     activeSlot: STAGING_SLOT,
     selectedId: null,
     /** ドラッグ中に「ここに落ちる」と示すエリアのスロット番号。 */
@@ -225,7 +234,9 @@ export function simulator() {
       const target = slots.find((slot) => slot.slot === this.activeSlot) ?? slots[0];
       if (!target) return;
 
-      const placement = createPlacement(equipment, target, () => crypto.randomUUID());
+      const placement = createPlacement(
+        equipment, target, () => crypto.randomUUID(), this.clearanceMm
+      );
       // 荷台に空きが無ければ置かない。重ねて仮置きしても収まらないことに変わりはない。
       if (!placement) {
         this.notice('荷台に空きスペースがないため、配置できません。機材置き場へ置くか、配置を詰めてください。');
@@ -273,7 +284,8 @@ export function simulator() {
         // 壁の外へは出さない。ポインタが荷台の外に出ても機材は壁で止まる。
         const inside = clampToBed(
           { ...placement, x: point.x - offset.x, y: point.y - offset.y },
-          working
+          working,
+          this.clearanceMm
         );
         placement.x = inside.x;
         placement.y = inside.y;
@@ -311,7 +323,9 @@ export function simulator() {
 
         if (dropSlot === working.slot) {
           const threshold = SNAP_PIXELS * mmPerPixel(svg);
-          const result = movePlacement(working, placementId, { x: placement.x, y: placement.y }, threshold);
+          const result = movePlacement(
+            working, placementId, { x: placement.x, y: placement.y }, threshold, this.clearanceMm
+          );
           // 押し出した先が荷台に収まらない場合は移動そのものが成立しない。
           // 掴む前の位置へ戻す（result.placements も元のまま返ってくる）。
           if (result.rejected) {
@@ -356,7 +370,9 @@ export function simulator() {
       const position = { x: point.x - offset.x, y: point.y - offset.y };
       const threshold = SNAP_PIXELS * mmPerPixel(targetSvg);
 
-      const result = movePlacementToSlot(sourceSlot, targetSlot, placementId, position, threshold);
+      const result = movePlacementToSlot(
+        sourceSlot, targetSlot, placementId, position, threshold, this.clearanceMm
+      );
       // 移動先に収まらなければ移動元に留める。
       if (result.rejected) {
         this.notice('移動先の荷台に収まらないため、移せません。');
@@ -433,12 +449,13 @@ export function simulator() {
         // 壁の外へは出さない。壁に向かって押し続けると、壁にぴったり付いて止まる。
         const target = clampToBed(
           { ...placement, x: placement.x + delta.x, y: placement.y + delta.y },
-          slot
+          slot,
+          this.clearanceMm
         );
         if (target.x === placement.x && target.y === placement.y) return;
 
         // キー操作は微調整なのでスナップは効かせない（しきい値0）
-        const result = movePlacement(slot, placement.id, target, 0);
+        const result = movePlacement(slot, placement.id, target, 0, this.clearanceMm);
         if (result.rejected) {
           this.notice('他の機材が荷台に収まらなくなるため、これ以上動かせません。');
           return;
@@ -452,7 +469,7 @@ export function simulator() {
 
     rotateSelected() {
       this.withSelected((slot, placement, slots) => {
-        const result = rotatePlacement(slot, placement.id);
+        const result = rotatePlacement(slot, placement.id, this.clearanceMm);
         // 隣を押し出すのは許すが、押し出した結果まで含めて収まらなければ回転しない。
         if (result.rejected) {
           this.notice('回転させると荷台に収まらないため、回転できません。');
@@ -475,7 +492,9 @@ export function simulator() {
 
     duplicateSelected() {
       this.withSelected((slot, placement, slots) => {
-        const copy = duplicatePlacement(slot, placement.id, () => crypto.randomUUID());
+        const copy = duplicatePlacement(
+          slot, placement.id, () => crypto.randomUUID(), this.clearanceMm
+        );
         if (!copy) {
           this.notice('空きスペースがないため、複製できません。');
           return;
@@ -526,6 +545,26 @@ export function simulator() {
     /** 通知バナーに出す。空文字を渡すと消える。 */
     notice(message) {
       this.noticeMessage = message;
+    },
+
+    /** 設定できる範囲へ丸める。手入力とDBの想定外の値の両方を受け止める。 */
+    normalizeClearance(value) {
+      const number = Math.round(Number(value));
+      if (!Number.isFinite(number)) return DEFAULT_CLEARANCE_MM;
+      return Math.min(Math.max(number, this.clearanceRange.min), this.clearanceRange.max);
+    },
+
+    /**
+     * クリアランスを変える。既に置いてある機材は動かさない。
+     * 勝手に配置が変わるほうが分かりにくいので、次の操作から新しい値で吸着させる。
+     */
+    setClearance(value) {
+      if (this.readOnly) return;
+      const next = this.normalizeClearance(value);
+      if (next === this.clearanceMm) return;
+
+      this.clearanceMm = next;
+      this.notice(`クリアランスを ${next}mm にしました。既に置いてある機材はそのままです。`);
     },
 
     noticeIfTruncated(truncated) {
@@ -766,6 +805,7 @@ export function simulator() {
             id: dialog.asNew ? undefined : this.layoutId ?? undefined,
             name: dialog.name,
             note: dialog.note,
+            clearanceMm: this.clearanceMm,
             slots: this.rawSlots()
           },
           this.session.user.id
@@ -791,6 +831,8 @@ export function simulator() {
       this.layoutName = row.name;
       this.layoutNote = row.note ?? '';
       this.layoutOwnerId = row.user_id;
+      // 004以前に保存されたレイアウトには列が無いので既定値で開く。
+      this.clearanceMm = this.normalizeClearance(row.clearance_mm ?? DEFAULT_CLEARANCE_MM);
 
       // 他人のレイアウトは編集できない（RLSでも弾かれる）。読み取り専用で開く。
       if (row.user_id !== this.session.user.id) {
