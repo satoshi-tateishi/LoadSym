@@ -249,14 +249,27 @@
               <input type="number" min="1" x-model.number="equipmentForm.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
           </div>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block text-xs mb-1">重量 kg</label>
-              <input type="number" min="0" step="0.1" x-model.number="equipmentForm.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
+          <div>
+            <label class="block text-xs mb-1">重量 kg</label>
+            <input type="number" min="0" step="0.1" x-model.number="equipmentForm.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <label class="text-xs">識別カラー</label>
+              <span class="w-6 h-4 rounded border" :style="`background:${equipmentForm.color}`"></span>
+              <code class="text-[10px] text-gray-500" x-text="equipmentForm.color"></code>
+              <span class="ml-auto text-[10px] text-gray-400">赤はエラー表示に使うため選べません</span>
             </div>
-            <div>
-              <label class="block text-xs mb-1">識別カラー</label>
-              <input type="color" x-model="equipmentForm.color" class="w-full border rounded h-8">
+            <div class="grid gap-px border rounded p-1 bg-gray-100"
+                 :style="`grid-template-columns: repeat(${paletteShades}, minmax(0, 1fr))`">
+              <template x-for="swatch in palette" :key="swatch.id">
+                <button type="button" class="aspect-square rounded-[2px] hover:outline hover:outline-1 hover:outline-gray-900"
+                        :style="`background:${swatch.hex}`"
+                        :class="equipmentForm.color === swatch.hex ? 'outline outline-2 outline-gray-900 z-10' : ''"
+                        :title="`${swatch.group} ${swatch.shade} / ${swatch.hex}`"
+                        @click="equipmentForm.color = swatch.hex"></button>
+              </template>
             </div>
           </div>
           <label class="flex items-center gap-2 text-xs" x-show="isAdmin">

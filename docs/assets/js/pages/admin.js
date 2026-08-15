@@ -13,6 +13,7 @@ import {
 import { listEquipments, createEquipment, updateEquipment, deleteEquipment, createEquipments }
   from '../equipments.js';
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
+import { PALETTE, PALETTE_SHADES, paletteToCsv } from '../palette.js';
 
 // iOS Safariはドラッグハンドルへのtouchstartを配信しないため、SortableJSでの
 // ドラッグ並び替えはPC/Mac相当の入力デバイスに限定し、タッチ環境では↑↓ボタンを使う。
@@ -42,6 +43,10 @@ export function admin() {
 
     isDesktop: false,
     sortableInstance: null,
+
+    /** 識別カラーの選択肢。赤はエラー表示に使うためパレットから除外してある。 */
+    palette: PALETTE,
+    paletteShades: PALETTE_SHADES,
 
     async init() {
       const desktopQuery = window.matchMedia(DESKTOP_QUERY);
@@ -261,7 +266,7 @@ export function admin() {
             depth_mm: 400,
             height_mm: 500,
             weight_kg: 0,
-            color: '#64748b'
+            color: PALETTE[0].hex
           };
     },
 
@@ -315,6 +320,23 @@ export function admin() {
 
     get csvHeaderSample() {
       return EQUIPMENT_CSV_HEADERS.join(',');
+    },
+
+    /**
+     * パレット255色をCSVで書き出す。スプレッドシートで機材リストを作るとき、
+     * color 列に貼る値をここから選べるようにするため。
+     * ExcelがUTF-8と判別できるようBOMを付ける。
+     */
+    downloadPaletteCsv() {
+      const blob = new Blob(['\ufeff' + paletteToCsv()], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'loadsym-color-palette.csv';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     },
 
     /** 取り込み前に必ずプレビューを挟む。誤ったCSVで一気に登録されるのを防ぐ。 */

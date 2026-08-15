@@ -75,6 +75,29 @@ export function parseCsv(text) {
   return rows.filter((cells) => cells.some((cell) => cell.trim() !== ''));
 }
 
+/** color 列が空のときに使う色。パレットの先頭ではなく落ち着いたグレーにする。 */
+const DEFAULT_COLOR = '#64748b';
+
+/**
+ * 赤系（色相 345〜20度）かどうか。彩度が低いグレーに近い色は赤とみなさない。
+ * パレット（palette.js）が赤を除外しているのと同じ基準。
+ */
+function isReddish(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta < 0.15) return false;
+
+  let hue;
+  if (max === r) hue = (((g - b) / delta) % 6) * 60;
+  else if (max === g) hue = ((b - r) / delta + 2) * 60;
+  else hue = ((r - g) / delta + 4) * 60;
+  if (hue < 0) hue += 360;
+
+  return hue >= 345 || hue <= 20;
+}
+
 /** 機材CSVで受け付ける列。1行目のヘッダーで対応付ける。 */
 export const EQUIPMENT_CSV_HEADERS = [
   'name',
@@ -155,10 +178,18 @@ export function toEquipmentRows(rows, categoryIdByName, fallbackCategoryId) {
     }
 
     const colorRaw = value('color');
-    let color = '#64748b';
+    let color = DEFAULT_COLOR;
     if (colorRaw) {
-      if (/^#[0-9a-fA-F]{6}$/.test(colorRaw)) color = colorRaw;
-      else problems.push(`color の形式が不正です（${colorRaw}）`);
+      if (!/^#[0-9a-fA-F]{6}$/.test(colorRaw)) {
+        problems.push(`color の形式が不正です（${colorRaw}）`);
+      } else {
+        color = colorRaw;
+        // 荷台のエラー表示に赤を使うため、識別色に赤系を選ぶと
+        // 「エラーなのか元の色なのか」が区別できなくなる。取り込みは止めない。
+        if (isReddish(color)) {
+          problems.push(`${color} は赤系です。はみ出しのエラー表示と紛らわしくなります`);
+        }
+      }
     }
 
     return {

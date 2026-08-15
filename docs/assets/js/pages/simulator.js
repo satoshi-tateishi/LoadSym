@@ -13,6 +13,7 @@ import { canEdit, canEditRecord } from '../auth.js';
 import { translateError } from '../error-messages.js';
 import { listEquipments, createEquipment, updateEquipment, deleteEquipment } from '../equipments.js';
 import { listCategories } from '../categories.js';
+import { PALETTE, PALETTE_SHADES } from '../palette.js';
 import { listTrucks, createTruck, updateTruck, deleteTruck, replaceObstacles } from '../trucks.js';
 import { saveLayout, loadLayout, toSlots } from '../layouts.js';
 import { createHistory } from '../history.js';
@@ -65,6 +66,10 @@ export function simulator() {
     equipmentForm: null,
     truckForm: null,
     saveDialog: null,
+
+    /** 識別カラーの選択肢。赤はエラー表示に使うためパレットから除外してある。 */
+    palette: PALETTE,
+    paletteShades: PALETTE_SHADES,
 
     history: null,
     canUndo: false,
@@ -568,7 +573,7 @@ export function simulator() {
             depth_mm: 400,
             height_mm: 500,
             weight_kg: 0,
-            color: '#64748b',
+            color: PALETTE[0].hex,
             asTemplate: false
           };
     },
