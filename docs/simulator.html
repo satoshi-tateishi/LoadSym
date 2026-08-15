@@ -44,15 +44,33 @@
       先に下の<span class="font-bold">機材置き場</span>へ必要な機材を並べておくこともできます。
     </p>
 
-    <!-- トラック（横並び） -->
-    <div class="flex flex-wrap gap-3 items-start">
+    <!-- トラック（横向き・縦に積む） -->
+    <div class="space-y-3">
       <template x-for="slot in truckSlots" :key="slot.slot">
         <div class="bg-white rounded border p-2"
              :class="dropTarget === slot.slot ? 'ring-2 ring-blue-400'
                      : activeSlot === slot.slot ? 'ring-2 ring-blue-600' : ''"
              @pointerdown="activeSlot = slot.slot">
-          <div class="flex items-center gap-2 mb-1">
+          <!-- 集計はSVGの上に一列で並べる。荷台が横長なので縦の場所を節約したい -->
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mb-1 text-[11px]"
+               x-data="{ s: null }" x-effect="s = summaryOf(slot)">
             <span class="text-xs font-bold" x-text="slot.truck.name"></span>
+            <template x-if="s">
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span><span class="text-gray-500">配置率</span>
+                  <span class="tabular-nums ml-1" x-text="(s.floorAreaRatio * 100).toFixed(1) + ' %'"></span></span>
+                <span><span class="text-gray-500">機材</span>
+                  <span class="tabular-nums ml-1" x-text="s.placementCount + ' 点'"></span></span>
+                <span :class="s.overPayload ? 'text-red-600 font-bold' : ''">
+                  <span class="text-gray-500">総重量</span>
+                  <span class="tabular-nums ml-1"
+                        x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></span></span>
+                <span x-show="s.invalidCount" class="text-red-600 font-bold"
+                      x-text="`はみ出し ${s.invalidCount} 点`"></span>
+                <span x-show="s.overHeightCount" class="text-amber-700"
+                      x-text="`高さ超過 ${s.overHeightCount} 点`"></span>
+              </div>
+            </template>
             <button type="button" class="ml-auto text-[10px] text-red-600 hover:underline print-hidden"
                     x-show="!readOnly" @click="removeSlot(slot.slot)">外す</button>
           </div>
@@ -60,30 +78,6 @@
           <svg class="simulator-stage block border border-gray-200"
                :style="stageStyle(slot)" :data-slot="slot.slot"
                @pointerdown="onStagePointerDown($event, slot)"></svg>
-
-          <dl class="mt-2 text-[11px] grid grid-cols-2 gap-x-3 gap-y-0.5" x-data="{ s: null }"
-              x-effect="s = summaryOf(slot)">
-            <template x-if="s">
-              <div class="contents">
-                <dt class="text-gray-500">配置率</dt>
-                <dd class="text-right tabular-nums" x-text="(s.floorAreaRatio * 100).toFixed(1) + ' %'"></dd>
-                <dt class="text-gray-500">機材点数</dt>
-                <dd class="text-right tabular-nums" x-text="s.placementCount + ' 点'"></dd>
-                <dt class="text-gray-500">総重量</dt>
-                <dd class="text-right tabular-nums" :class="s.overPayload ? 'text-red-600 font-bold' : ''"
-                    x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></dd>
-                <dt class="text-gray-500">はみ出し</dt>
-                <dd class="text-right tabular-nums" :class="s.invalidCount ? 'text-red-600 font-bold' : ''"
-                    x-text="s.invalidCount + ' 点'"></dd>
-                <template x-if="s.overHeightCount">
-                  <dt class="text-amber-700">高さ超過</dt>
-                </template>
-                <template x-if="s.overHeightCount">
-                  <dd class="text-right text-amber-700 tabular-nums" x-text="s.overHeightCount + ' 点'"></dd>
-                </template>
-              </div>
-            </template>
-          </dl>
         </div>
       </template>
     </div>

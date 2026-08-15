@@ -16,11 +16,13 @@ import { toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, f
 // 機材置き場（ステージングエリア）の寸法。
 // 「その現場に必要な機材を先に並べてから積む」という実際の作業手順を画面上でも
 // なぞれるよう、トラックの下に常設する。マスタ登録はせず固定寸法とする。
-// 置き場はトラックより横長に描くため、同じ機材でもトラック側よりやや大きく見える。
-// 幅を広げるほどトラック側のスケールに近づくので、使ってみて調整する余地を残している。
+//
+// 荷台と同じく x = 幅方向 / y = 奥行き方向。描画時に90度回して横向きに描く
+// （renderer.js）ため、画面上では 8000mm の辺が横に伸びる。トラックと座標系を
+// 揃えておかないと、エリアをまたいでドラッグしたときに機材の向きが変わってしまう。
 export const STAGING_SLOT = 0;
-export const STAGING_WIDTH_MM = 8000;
-export const STAGING_DEPTH_MM = 2000;
+export const STAGING_WIDTH_MM = 2000;
+export const STAGING_DEPTH_MM = 8000;
 
 /** 空の機材置き場を作る。トラックが未読込でも先に機材を並べられるよう常に存在させる。 */
 export function createStagingSlot() {
