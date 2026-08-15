@@ -56,6 +56,37 @@ export async function deleteEquipment(id) {
   if (error) throw error;
 }
 
+/**
+ * 並び順を id の配列どおりに振り直す。
+ * sort_order は 10 刻みで採番する（後から手で間に差し込めるように）。
+ * 渡された id の行だけを読み書きするので、対象外の機材には触れない。
+ *
+ * @param {Array<string>} orderedIds 表示順に並べた機材id
+ * @returns {number} 実際に更新した行数
+ */
+export async function updateEquipmentOrder(orderedIds) {
+  const { data: current, error } = await supabase
+    .from('equipments')
+    .select('id, sort_order')
+    .in('id', orderedIds);
+  if (error) throw error;
+
+  const currentById = new Map(current.map((row) => [row.id, row.sort_order]));
+  const changed = orderedIds
+    .map((id, index) => ({ id, sortOrder: (index + 1) * 10 }))
+    .filter((row) => currentById.get(row.id) !== row.sortOrder);
+
+  for (const row of changed) {
+    const { error: updateError } = await supabase
+      .from('equipments')
+      .update({ sort_order: row.sortOrder })
+      .eq('id', row.id);
+    if (updateError) throw updateError;
+  }
+
+  return changed.length;
+}
+
 /** CSVインポート用の一括登録。件数制限トリガはDB側で効く。 */
 export async function createEquipments(rows, userId) {
   const { data, error } = await supabase

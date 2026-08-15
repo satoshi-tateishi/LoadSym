@@ -10,8 +10,10 @@ import {
   listCategories, createCategory, updateCategory, deleteCategory, countEquipmentsByCategory,
   updateCategoryOrder
 } from '../categories.js';
-import { listEquipments, createEquipment, updateEquipment, deleteEquipment, createEquipments }
-  from '../equipments.js';
+import {
+  listEquipments, createEquipment, updateEquipment, deleteEquipment, createEquipments,
+  updateEquipmentOrder
+} from '../equipments.js';
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
 import { PALETTE, PALETTE_SHADES, paletteToCsv } from '../palette.js';
 
@@ -42,7 +44,8 @@ export function admin() {
     importPreview: null,
 
     isDesktop: false,
-    sortableInstance: null,
+    /** 並び替え可能なリストごとのSortableインスタンス。 */
+    sortables: { categories: null, templates: null },
 
     /** 識別カラーの選択肢。赤はエラー表示に使うためパレットから除外してある。 */
     palette: PALETTE,
@@ -191,58 +194,97 @@ export function admin() {
 
       const reordered = [...this.categories];
       [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
-      await this.persistOrder(reordered);
+      await this.persistCategoryOrder(reordered);
     },
 
     /** PC/Mac相当の入力デバイスのときだけドラッグ並び替えを有効にする。 */
     syncSortable() {
-      if (this.isDesktop && !this.sortableInstance) {
-        this.initSortable();
-      } else if (!this.isDesktop && this.sortableInstance) {
-        this.sortableInstance.destroy();
-        this.sortableInstance = null;
-      }
+      this.bindSortable(
+        'categories',
+        'category-list',
+        () => this.categories,
+        (reordered) => this.persistCategoryOrder(reordered)
+      );
+      this.bindSortable(
+        'templates',
+        'template-list',
+        () => this.templates,
+        (reordered) => this.persistTemplateOrder(reordered)
+      );
     },
 
-    initSortable() {
-      const container = document.getElementById('category-list');
+    /**
+     * 並び替え可能なリスト1つ分のSortableを付け外しする。
+     * カテゴリとテンプレート機材で同じ挙動にするため、1か所にまとめている。
+     */
+    bindSortable(key, elementId, getItems, persist) {
+      if (!this.isDesktop) {
+        if (this.sortables[key]) {
+          this.sortables[key].destroy();
+          this.sortables[key] = null;
+        }
+        return;
+      }
+      if (this.sortables[key]) return;
+
+      const container = document.getElementById(elementId);
       if (!container || typeof Sortable === 'undefined') return;
 
       // oldIndex/newIndex は信用せず、ドロップ後のDOMの実並び（data-id）を正とする。
       // SortableJSがDOMを動かした結果とAlpineの再描画がずれるのを避けるため、
       // 並べ替えたデータをそのまま代入してAlpineに追従させる。
-      this.sortableInstance = new Sortable(container, {
+      this.sortables[key] = new Sortable(container, {
         animation: 150,
         handle: '.drag-handle',
         ghostClass: 'opacity-40',
         onEnd: async () => {
           const orderedIds = Array.from(container.children).map((row) => row.dataset.id);
-          const byId = new Map(this.categories.map((category) => [category.id, category]));
+          const items = getItems();
+          const byId = new Map(items.map((item) => [item.id, item]));
           const reordered = orderedIds.map((id) => byId.get(id)).filter(Boolean);
-          if (reordered.length !== this.categories.length) return;
+          if (reordered.length !== items.length) return;
 
-          const changed = reordered.some((category, index) => category.id !== this.categories[index].id);
+          const changed = reordered.some((item, index) => item.id !== items[index].id);
           if (!changed) return;
 
-          await this.persistOrder(reordered);
+          await persist(reordered);
         }
       });
     },
 
-    /** 画面の並びを確定してDBへ反映する。失敗したらサーバーの状態に戻す。 */
-    async persistOrder(reordered) {
+    async persistCategoryOrder(reordered) {
       const previous = this.categories;
       this.categories = reordered;
+      await this.saveOrder(
+        () => updateCategoryOrder(reordered.map((category) => category.id)),
+        () => {
+          this.categories = previous;
+        }
+      );
+    },
 
+    async persistTemplateOrder(reordered) {
+      const previous = this.templates;
+      this.templates = reordered;
+      await this.saveOrder(
+        () => updateEquipmentOrder(reordered.map((item) => item.id)),
+        () => {
+          this.templates = previous;
+        }
+      );
+    },
+
+    /** 画面の並びを確定してDBへ反映する。失敗したらサーバーの状態に戻す。 */
+    async saveOrder(save, rollback) {
       this.saving = true;
       this.errorMessage = '';
       try {
-        await updateCategoryOrder(reordered.map((category) => category.id));
+        await save();
         await this.reload();
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
-        this.categories = previous;
+        rollback();
       } finally {
         this.saving = false;
       }
@@ -253,6 +295,17 @@ export function admin() {
     get defaultCategoryId() {
       const fallback = this.categories.find((category) => category.name === 'その他');
       return (fallback ?? this.categories[0])?.id ?? null;
+    },
+
+    /** ↑↓ボタンで1つ入れ替える。タッチ環境ではこちらが唯一の並び替え手段になる。 */
+    async moveTemplate(item, direction) {
+      const index = this.templates.findIndex((template) => template.id === item.id);
+      const target = index + direction;
+      if (target < 0 || target >= this.templates.length) return;
+
+      const reordered = [...this.templates];
+      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      await this.persistTemplateOrder(reordered);
     },
 
     openEquipmentForm(item) {
