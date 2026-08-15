@@ -6,8 +6,10 @@
 //
 // ブラウザ向けのESMをNodeからそのまま読むため、依存ゼロ・アサーションも自前。
 
-import { snapPosition, resolveOverlaps, findInvalidRects, rotatedSize, rectsOverlap, CLEARANCE_MM }
-  from '../docs/assets/js/geometry.js';
+import {
+  snapPosition, resolveOverlaps, findInvalidRects, rotatedSize, rectsOverlap, findFreeSpot,
+  CLEARANCE_MM
+} from '../docs/assets/js/geometry.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -97,6 +99,31 @@ eq('10mm離れていれば正常',
     { id: 'b', x: 620, y: 10, w: 600, d: 400 }
   ], bed)],
   []);
+
+console.log('# findFreeSpot');
+{
+  // 11tロングの内寸に幅1160を2つ並べる。2つ目は x=1180 にしか置けない。
+  // 50mm刻みの格子で探すと 1160 の次が 1210 で上限を超え、半分しか積めなかった。
+  const wide = { w: 2363, d: 9090 };
+  const first = findFreeSpot({ w: 1160, d: 405 }, [], wide);
+  eq('1つ目は左前の隅', first, { x: CLEARANCE_MM, y: CLEARANCE_MM });
+
+  const placed = [{ id: 'a', x: first.x, y: first.y, w: 1160, d: 405 }];
+  eq('2つ目は隣に詰めて置ける', findFreeSpot({ w: 1160, d: 405 }, placed, wide), { x: 1180, y: 10 });
+}
+{
+  // 横に入らなければ次の列へ送る
+  const narrow = { w: 1700, d: 4400 };
+  const placed = [{ id: 'a', x: 10, y: 10, w: 1160, d: 405 }];
+  eq('入らなければ後ろの列へ', findFreeSpot({ w: 1160, d: 405 }, placed, narrow), { x: 10, y: 425 });
+}
+{
+  // 障害物も避ける。避けた先が荷台からはみ出すなら null。
+  const tiny = { w: 1000, d: 1000 };
+  const tire = { id: 'obstacle:t', x: 0, y: 0, w: 400, d: 1000 };
+  eq('障害物を避ける', findFreeSpot({ w: 500, d: 500 }, [], tiny, [tire]), { x: 410, y: 10 });
+  eq('避けきれなければ null', findFreeSpot({ w: 800, d: 500 }, [], tiny, [tire]), null);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -65,8 +65,11 @@
                   <span class="text-gray-500">総重量</span>
                   <span class="tabular-nums ml-1"
                         x-text="s.totalWeightKg.toLocaleString() + (s.maxPayloadKg ? ' / ' + Number(s.maxPayloadKg).toLocaleString() : '') + ' kg'"></span></span>
+                <!-- 収まらない操作は成立しないので、赤くなるのは保存済みデータ由来の
+                     はみ出しに限られる。件数には重なりと障害物干渉も含むため「要確認」とする。 -->
                 <span x-show="s.invalidCount" class="text-red-600 font-bold"
-                      x-text="`はみ出し ${s.invalidCount} 点`"></span>
+                      title="荷台からのはみ出し・障害物との干渉・機材どうしの重なりの合計です。"
+                      x-text="`要確認 ${s.invalidCount} 点`"></span>
                 <span x-show="s.overHeightCount" class="text-amber-700"
                       x-text="`高さ超過 ${s.overHeightCount} 点`"></span>
               </div>

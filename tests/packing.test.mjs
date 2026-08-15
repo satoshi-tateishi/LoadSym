@@ -2,7 +2,8 @@
 
 import {
   movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
-  createPlacement, createStagingSlot, isStaging, STAGING_SLOT
+  createPlacement, createStagingSlot, isStaging, STAGING_SLOT,
+  clampToBed, duplicatePlacement
 } from '../docs/assets/js/packing.js';
 
 let pass = 0;
@@ -95,17 +96,17 @@ console.log('# movePlacement');
   eq('壁にスナップする', { x: placements[0].x, y: placements[0].y }, { x: 10, y: 10 });
 }
 {
-  // 障害物（タイヤハウス）の上に直接ドロップした場合は、位置を勝手に補正せず
-  // エラー（赤表示）にする。仕様どおり「移動を阻む」のではなく「見せて気づかせる」。
+  // 障害物（タイヤハウス）の上には物理的に置けない。赤くして見せるのではなく、
+  // 移動そのものを棄却して元の位置に留める。
   const tire = { id: 'tire', label: 'タイヤハウス', x: 0, y: 1800, w: 300, d: 900, heightMm: 300 };
   const slot = makeSlot(
     [{ id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 1000, y: 2000, rotation: 0 }],
     [tire]
   );
-  const { placements } = movePlacement(slot, 'p1', { x: 10, y: 2000 }, 60);
-  const s = summarize({ ...slot, placements });
-  eq('障害物との干渉をエラーにする', s.invalidCount, 1);
-  eq('エラー対象は該当機材', [...s.invalidIds].includes('p1'), true);
+  const r = movePlacement(slot, 'p1', { x: 10, y: 2000 }, 60);
+  eq('障害物の上へは移動できない', r.rejected, true);
+  eq('位置は元のまま', { x: r.placements[0].x, y: r.placements[0].y }, { x: 1000, y: 2000 });
+  eq('エラーが残らない', summarize({ ...slot, placements: r.placements }).invalidCount, 0);
 }
 {
   // 一方、押し出しの結果として障害物の上へ送り込むことはしない（避けて逃げる）
@@ -220,6 +221,144 @@ console.log('# movePlacementToSlot（エリア間移動）');
   const truck = makeSlot([]);
   const r = movePlacementToSlot(staging, truck, 'missing', { x: 0, y: 0 }, 60);
   eq('存在しない配置は無視する', { s: r.source.length, t: r.target.length }, { s: 0, t: 0 });
+}
+
+console.log('# 荷台に収まらない操作を成立させない');
+// 任意の内寸の荷台。逃げ場の有無を作り分けるために使う。
+const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
+  id: 'x1',
+  slot: 1,
+  truck: { name: 'テスト', bedWidthMm, bedDepthMm, bedHeightMm: 1900, maxPayloadKg: 2000 },
+  obstacles: [],
+  placements
+});
+
+{
+  // 回転で隣を押し出すのは許す。押し出した結果まで荷台に収まっているため。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 420, y: 10, rotation: 0 }
+  ]);
+  const r = rotatePlacement(slot, 'p1');
+  eq('収まるなら回転できる', r.rejected, false);
+  eq('回転が反映される', r.placements.find((p) => p.id === 'p1').rotation, 90);
+  eq('隣が押し出される', r.placements.find((p) => p.id === 'p2').x, 620);
+  eq('押し出し後もエラーなし', summarize({ ...slot, placements: r.placements }).invalidCount, 0);
+}
+{
+  // 回転すると幅1800が内寸1700を超える。押し出す相手もいないので単純に棄却される。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('長物', 400, 1800, 500, 10), x: 10, y: 10, rotation: 0 }
+  ]);
+  const r = rotatePlacement(slot, 'p1');
+  eq('収まらない回転は棄却する', r.rejected, true);
+  eq('向きは元のまま', r.placements[0].rotation, 0);
+  eq('位置も元のまま', { x: r.placements[0].x, y: r.placements[0].y }, { x: 10, y: 10 });
+}
+{
+  // 逃げ場のない荷台。回転すると隣がどちらへ逃げても荷台外に出るので、回転ごと棄却する。
+  const slot = makeBed(1000, 700, [
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 420, y: 10, rotation: 0 }
+  ]);
+  const r = rotatePlacement(slot, 'p1');
+  eq('押し出し先がなければ回転しない', r.rejected, true);
+  eq('押し出される側も動かない', r.placements.find((p) => p.id === 'p2').x, 420);
+  eq('はみ出しが生まれない', summarize({ ...slot, placements: r.placements }).invalidCount, 0);
+}
+{
+  // 壁の外へは出さない。壁に押し付けた形で止まる。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 }
+  ]);
+  const placement = slot.placements[0];
+  eq('右の壁で止まる', clampToBed({ ...placement, x: 9999, y: 10 }, slot).x, 1700 - 400);
+  eq('後ろの壁で止まる', clampToBed({ ...placement, x: 10, y: 9999 }, slot).y, 4400 - 600);
+  eq('左の壁で止まる', clampToBed({ ...placement, x: -500, y: 10 }, slot).x, 0);
+  // 回転後の外形で判定する（幅と奥行きが入れ替わる）
+  const turned = { ...placement, rotation: 90, x: 9999, y: 9999 };
+  eq('回転後の外形で止まる', clampToBed(turned, slot), { x: 1700 - 600, y: 4400 - 400 });
+}
+{
+  // 荷台より大きい機材は上限が負になる。左前の角に寄せる。
+  const slot = makeBed(500, 500, []);
+  const oversize = { id: 'p1', snapshot: snapshot('大物', 900, 900, 500, 10), x: 300, y: 300, rotation: 0 };
+  eq('荷台より大きければ角に寄る', clampToBed(oversize, slot), { x: 0, y: 0 });
+}
+{
+  // 機材置き場は積み込み前の作業台。収まるかどうかを問わない。
+  const staging = createStagingSlot();
+  staging.placements = [
+    { id: 'p1', snapshot: snapshot('A', 700, 500, 900, 45), x: 100, y: 100, rotation: 0 }
+  ];
+  eq('置き場では壁で止めない', clampToBed({ ...staging.placements[0], x: 9999, y: 10 }, staging).x, 9999);
+  const r = movePlacement(staging, 'p1', { x: 1900, y: 100 }, 0);
+  eq('置き場では棄却しない', r.rejected, false);
+  eq('置き場でははみ出せる', r.placements[0].x, 1900);
+}
+{
+  // 既にはみ出している既存データを開いても、悪化させない操作は通す。
+  // そうしないと直す手立てがなくなる。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 1500, y: 10, rotation: 0 }
+  ]);
+  eq('前提: 元からはみ出している', summarize(slot).invalidCount, 1);
+
+  const stillOut = movePlacement(slot, 'p1', { x: 1450, y: 10 }, 0);
+  eq('はみ出したままの移動は通す', stillOut.rejected, false);
+  eq('移動が反映される', stillOut.placements[0].x, 1450);
+
+  const fixed = movePlacement(slot, 'p1', { x: 100, y: 10 }, 0);
+  eq('荷台内へ戻す移動も通す', fixed.rejected, false);
+  eq('はみ出しが解消する', summarize({ ...slot, placements: fixed.placements }).invalidCount, 0);
+}
+{
+  // 別エリアへのドロップも、移動先に収まらなければ移動元に留める。
+  const staging = createStagingSlot();
+  staging.placements = [
+    { id: 'p1', snapshot: snapshot('長物', 400, 1800, 500, 10), x: 100, y: 100, rotation: 90 }
+  ];
+  const truck = makeBed(1000, 4400, []);
+  const r = movePlacementToSlot(staging, truck, 'p1', { x: 10, y: 10 }, 0);
+  eq('収まらない移動は棄却する', r.rejected, true);
+  eq('移動元に留まる', r.source.length, 1);
+  eq('移動先には増えない', r.target.length, 0);
+}
+
+console.log('# 空きが無いときは置かない');
+{
+  const slot = makeBed(500, 500, []);
+  const created = createPlacement(
+    { id: 'e1', name: '大物', width_mm: 900, depth_mm: 900, height_mm: 500, weight_kg: 10, color: '#ff0000' },
+    slot,
+    () => 'new1'
+  );
+  eq('荷台に空きが無ければ作らない', created, null);
+}
+{
+  // 置き場は逃がし先なので、空きが無くても置ける
+  const staging = createStagingSlot();
+  const created = createPlacement(
+    { id: 'e1', name: '大物', width_mm: 9000, depth_mm: 9000, height_mm: 500, weight_kg: 10, color: '#ff0000' },
+    staging,
+    () => 'new1'
+  );
+  eq('置き場は空きが無くても置ける', created?.id, 'new1');
+}
+{
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 }
+  ]);
+  const copy = duplicatePlacement(slot, 'p1', () => 'copy1');
+  eq('複製は空きに置かれる', summarize({ ...slot, placements: [...slot.placements, copy] }).invalidCount, 0);
+  eq('複製は別idになる', copy.id, 'copy1');
+  eq('複製は元の情報を保つ', { name: copy.snapshot.name, rotation: copy.rotation }, { name: 'A', rotation: 0 });
+}
+{
+  const slot = makeBed(420, 620, [
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 }
+  ]);
+  eq('空きが無ければ複製しない', duplicatePlacement(slot, 'p1', () => 'copy1'), null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

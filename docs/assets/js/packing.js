@@ -68,11 +68,42 @@ export function placementRects(slot) {
   return slot.placements.map(toRect);
 }
 
-/** 機材マスタから新しい配置を作る。空き位置が無ければ左前に重ねて置く（エラー表示になる）。 */
+/**
+ * 荷台に収まる位置へ座標を丸める。壁を押しても機材が壁で止まるようにするため、
+ * ドラッグ中とナッジで使う。回転後の外形で計算するので rotation を見る必要はない。
+ *
+ * 機材置き場は素通しする。ここは積み込み前の作業台で、収まらない機材の逃がし先を
+ * 兼ねているため、壁で止めると置き場所が無くなって操作に詰まる。
+ */
+export function clampToBed(placement, slot) {
+  const x = Math.round(placement.x);
+  const y = Math.round(placement.y);
+  if (isStaging(slot)) return { x, y };
+
+  const bed = bedOf(slot);
+  const rect = toRect(placement);
+  return {
+    x: clampAxis(x, bed.w - rect.w),
+    y: clampAxis(y, bed.d - rect.d)
+  };
+}
+
+/** 荷台より大きい機材では上限が負になる。そのときは左前の角(0)に寄せる。 */
+function clampAxis(value, max) {
+  return Math.max(0, Math.min(value, Math.max(max, 0)));
+}
+
+/**
+ * 機材マスタから新しい配置を作る。
+ * 荷台に空きが無ければ null を返す。重ねて仮置きすると、収まらない配置を
+ * 作らせないという方針に反するため、呼び出し側で「置けなかった」と伝えさせる。
+ * 機材置き場だけは作業台なので、空きが無くても左前に置く。
+ */
 export function createPlacement(equipment, slot, idFactory) {
   const size = { w: equipment.width_mm, d: equipment.depth_mm };
-  const spot =
-    findFreeSpot(size, placementRects(slot), bedOf(slot), obstacleRects(slot)) ?? { x: 10, y: 10 };
+  const free = findFreeSpot(size, placementRects(slot), bedOf(slot), obstacleRects(slot));
+  if (!free && !isStaging(slot)) return null;
+  const spot = free ?? { x: 10, y: 10 };
 
   return {
     id: idFactory(),
@@ -92,13 +123,50 @@ export function createPlacement(equipment, slot, idFactory) {
 }
 
 /**
+ * 配置を複製する。斜めにずらすだけでは荷台の後端にある機材が必ずはみ出すので、
+ * createPlacement と同じように空きを探して置く。空きが無ければ null を返す。
+ */
+export function duplicatePlacement(slot, placementId, idFactory) {
+  const source = slot.placements.find((placement) => placement.id === placementId);
+  if (!source) return null;
+
+  const rect = toRect(source);
+  const free = findFreeSpot(
+    { w: rect.w, d: rect.d },
+    placementRects(slot),
+    bedOf(slot),
+    obstacleRects(slot)
+  );
+  if (!free && !isStaging(slot)) return null;
+  const spot = free ?? { x: 10, y: 10 };
+
+  return {
+    ...source,
+    snapshot: { ...source.snapshot },
+    id: idFactory(),
+    x: spot.x,
+    y: spot.y
+  };
+}
+
+/**
  * 配置を移動する。スナップを効かせたうえで、重なりを連鎖的に解消する。
+ * 結果が荷台に収まらなければ移動そのものを棄却する（rejected を参照）。
  * @param {number} thresholdMm スナップの効く距離（ズーム率に応じて呼び出し側が決める）
- * @returns {{placements: Array, truncated: boolean}}
+ * @returns {{placements: Array, truncated: boolean, rejected: boolean}}
  */
 export function movePlacement(slot, placementId, position, thresholdMm) {
+  return applyMove(slot, slot, placementId, position, thresholdMm);
+}
+
+/**
+ * 移動の実体。before には「操作前のスロット」を渡す。
+ * 別エリアから移してきた場合、slot には移動中の機材が既に足されているため、
+ * それを含まない before と比べないと、着地した時点で不正でも棄却できない。
+ */
+function applyMove(slot, before, placementId, position, thresholdMm) {
   const moving = slot.placements.find((placement) => placement.id === placementId);
-  if (!moving) return { placements: slot.placements, truncated: false };
+  if (!moving) return { placements: slot.placements, truncated: false, rejected: false };
 
   const size = rotatedSize(moving.snapshot.widthMm, moving.snapshot.depthMm, moving.rotation);
   const others = [
@@ -117,37 +185,55 @@ export function movePlacement(slot, placementId, position, thresholdMm) {
     placement.id === placementId ? { ...placement, x: snapped.x, y: snapped.y } : placement
   );
 
-  return settle({ ...slot, placements: updated }, placementId, null);
+  return settle({ ...slot, placements: updated }, before, placementId, null);
 }
 
 /**
  * 配置を別のエリアへ移す（機材置き場 → トラック、トラック → 別のトラック など）。
  * 移動先では通常の移動と同じようにスナップと連鎖押し出しが働く。
  *
- * @returns {{source: Array, target: Array, truncated: boolean}}
+ * @returns {{source: Array, target: Array, truncated: boolean, rejected: boolean}}
  *   それぞれ移動元・移動先の新しい placements 配列。
+ *   移動先に収まらない場合は棄却し、両方とも元のまま返す（移動元に留まる）。
  */
 export function movePlacementToSlot(sourceSlot, targetSlot, placementId, position, thresholdMm) {
   const moving = sourceSlot.placements.find((placement) => placement.id === placementId);
   if (!moving) {
-    return { source: sourceSlot.placements, target: targetSlot.placements, truncated: false };
+    return {
+      source: sourceSlot.placements,
+      target: targetSlot.placements,
+      truncated: false,
+      rejected: false
+    };
   }
 
   const source = sourceSlot.placements.filter((placement) => placement.id !== placementId);
   const landed = { ...moving, x: Math.round(position.x), y: Math.round(position.y) };
   const staged = { ...targetSlot, placements: [...targetSlot.placements, landed] };
 
-  const result = movePlacement(staged, placementId, position, thresholdMm);
-  return { source, target: result.placements, truncated: result.truncated };
+  const result = applyMove(staged, targetSlot, placementId, position, thresholdMm);
+  if (result.rejected) {
+    return {
+      source: sourceSlot.placements,
+      target: targetSlot.placements,
+      truncated: result.truncated,
+      rejected: true
+    };
+  }
+
+  return { source, target: result.placements, truncated: result.truncated, rejected: false };
 }
 
 /**
  * 配置を90度回転させる。回転で伸びた軸を押し出しの優先方向として渡すことで、
  * 一列に並んだ機材が列の向きに沿って逃げるようにする。
+ *
+ * 隣接する機材を押し出すのは許すが、押し出した結果まで含めて荷台に収まる場合だけ。
+ * 収まらなければ回転を棄却するので、向きも位置も元のまま返る。
  */
 export function rotatePlacement(slot, placementId) {
   const target = slot.placements.find((placement) => placement.id === placementId);
-  if (!target) return { placements: slot.placements, truncated: false };
+  if (!target) return { placements: slot.placements, truncated: false, rejected: false };
 
   const before = rotatedSize(target.snapshot.widthMm, target.snapshot.depthMm, target.rotation);
   const rotation = (target.rotation + 90) % 360;
@@ -158,14 +244,15 @@ export function rotatePlacement(slot, placementId) {
   );
 
   const preferredAxis = after.w > before.w ? 'x' : after.d > before.d ? 'y' : null;
-  return settle({ ...slot, placements: updated }, placementId, preferredAxis);
+  return settle({ ...slot, placements: updated }, slot, placementId, preferredAxis);
 }
 
 /**
  * 指定した配置を固定したまま、重なりを連鎖的に解消して座標を確定させる。
  * 障害物も固定側に含めるため、機材が障害物を押しのけることはない。
+ * 収束後に判定し、収まらなければ操作前（before）の配置をそのまま返す。
  */
-function settle(slot, pinnedPlacementId, preferredAxis) {
+function settle(slot, before, pinnedPlacementId, preferredAxis) {
   const obstacles = obstacleRects(slot);
   const rects = [...placementRects(slot), ...obstacles];
   const pinnedIds = [pinnedPlacementId, ...obstacles.map((rect) => rect.id)];
@@ -178,7 +265,36 @@ function settle(slot, pinnedPlacementId, preferredAxis) {
     return rect ? { ...placement, x: rect.x, y: rect.y } : placement;
   });
 
-  return { placements, truncated: resolved.truncated };
+  if (rejects(before, { ...slot, placements })) {
+    return { placements: before.placements, truncated: resolved.truncated, rejected: true };
+  }
+
+  return { placements, truncated: resolved.truncated, rejected: false };
+}
+
+/**
+ * 操作を棄却すべきか。操作前に問題の無かった機材が、操作の結果はみ出したり
+ * 重なったりしたら棄却する。
+ *
+ * 「結果が少しでも不正なら棄却」にしないのは、はみ出しを含む既存データ
+ * （DBは負の座標も許している）を開いたときに、以後あらゆる操作が棄却されて
+ * 直せなくなるため。悪化させない操作は通す。
+ *
+ * 機材置き場は判定しない。積み込み前の作業台なので、収まるかどうかを
+ * 問う場所ではない。
+ */
+function rejects(before, after) {
+  if (isStaging(after)) return false;
+
+  const was = invalidIdsOf(before);
+  for (const id of invalidIdsOf(after)) {
+    if (!was.has(id)) return true;
+  }
+  return false;
+}
+
+function invalidIdsOf(slot) {
+  return findInvalidRects(placementRects(slot), bedOf(slot), obstacleRects(slot));
 }
 
 /**

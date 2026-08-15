@@ -269,19 +269,34 @@ export function findInvalidRects(rects, bed, obstacles = []) {
 
 /**
  * 荷台内で、指定サイズの機材を置ける空き位置を左前から探す。
- * リストから新規にドラッグせずダブルクリック等で追加するときの初期位置に使う。
- * 見つからなければ null を返す（呼び出し側で荷台外に仮置きする）。
+ * リストからクリックで追加するときや複製するときの初期位置に使う。
+ * 見つからなければ null を返す（呼び出し側で「置けなかった」と伝える）。
+ *
+ * 候補は「壁ぎわ」と「既にある矩形の右／後ろにクリアランスを空けて接する位置」に限る。
+ * 固定間隔の格子で走査すると、格子の目からわずかに外れた隙間を丸ごと見落とす。
+ * 例えば内寸 2363mm の荷台に幅 1160mm を2つ並べる位置は x = 1180 だが、
+ * 50mm 刻みでは 1160 の次が 1210 で上限を超えるため、2つ目が永久に置けなくなる。
+ * 辺を基準にすれば必ず詰めて置ける。
  */
 export function findFreeSpot(size, occupied, bed, obstacles = []) {
-  const step = 50;
   const blockers = [...occupied, ...obstacles];
+  const xs = edgeCandidates(blockers.map((rect) => rect.x + rect.w));
+  const ys = edgeCandidates(blockers.map((rect) => rect.y + rect.d));
 
-  for (let y = CLEARANCE_MM; y + size.d <= bed.d; y += step) {
-    for (let x = CLEARANCE_MM; x + size.w <= bed.w; x += step) {
+  for (const y of ys) {
+    if (y + size.d > bed.d) continue;
+    for (const x of xs) {
+      if (x + size.w > bed.w) continue;
       const candidate = { x, y, w: size.w, d: size.d };
       const collides = blockers.some((other) => rectsOverlap(candidate, other, CLEARANCE_MM));
       if (!collides) return { x, y };
     }
   }
   return null;
+}
+
+/** 壁ぎわと各辺の外側を、左前から順に並べた候補にする。 */
+function edgeCandidates(edges) {
+  const values = [CLEARANCE_MM, ...edges.map((edge) => edge + CLEARANCE_MM)];
+  return [...new Set(values.map((value) => Math.round(value)))].sort((a, b) => a - b);
 }

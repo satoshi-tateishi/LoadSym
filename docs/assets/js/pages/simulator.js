@@ -19,7 +19,7 @@ import { saveLayout, loadLayout, toSlots } from '../layouts.js';
 import { createHistory } from '../history.js';
 import {
   createPlacement, movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
-  createStagingSlot, isStaging, STAGING_SLOT
+  createStagingSlot, isStaging, STAGING_SLOT, clampToBed, duplicatePlacement
 } from '../packing.js';
 import { renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM, viewSize }
   from '../renderer.js';
@@ -226,6 +226,12 @@ export function simulator() {
       if (!target) return;
 
       const placement = createPlacement(equipment, target, () => crypto.randomUUID());
+      // 荷台に空きが無ければ置かない。重ねて仮置きしても収まらないことに変わりはない。
+      if (!placement) {
+        this.notice('荷台に空きスペースがないため、配置できません。機材置き場へ置くか、配置を詰めてください。');
+        return;
+      }
+
       target.placements = [...target.placements, placement];
 
       this.commit(slots);
@@ -264,8 +270,13 @@ export function simulator() {
 
       const onMove = (moveEvent) => {
         const point = clientToBed(svg, moveEvent.clientX, moveEvent.clientY);
-        placement.x = Math.round(point.x - offset.x);
-        placement.y = Math.round(point.y - offset.y);
+        // 壁の外へは出さない。ポインタが荷台の外に出ても機材は壁で止まる。
+        const inside = clampToBed(
+          { ...placement, x: point.x - offset.x, y: point.y - offset.y },
+          working
+        );
+        placement.x = inside.x;
+        placement.y = inside.y;
         moved = true;
         // ドラッグ中は描画し直さず座標だけ書き換える（ポインタキャプチャを維持するため）
         updatePlacementPosition(svg, placement);
@@ -301,8 +312,18 @@ export function simulator() {
         if (dropSlot === working.slot) {
           const threshold = SNAP_PIXELS * mmPerPixel(svg);
           const result = movePlacement(working, placementId, { x: placement.x, y: placement.y }, threshold);
+          // 押し出した先が荷台に収まらない場合は移動そのものが成立しない。
+          // 掴む前の位置へ戻す（result.placements も元のまま返ってくる）。
+          if (result.rejected) {
+            placement.x = start.x;
+            placement.y = start.y;
+            this.slots = slots;
+            this.notice('ここへ移すと他の機材が荷台に収まらないため、移動できません。');
+            this.renderAll();
+            return;
+          }
           working.placements = result.placements;
-          this.warnIfTruncated(result.truncated);
+          this.noticeIfTruncated(result.truncated);
           this.commit(slots);
           return;
         }
@@ -336,10 +357,17 @@ export function simulator() {
       const threshold = SNAP_PIXELS * mmPerPixel(targetSvg);
 
       const result = movePlacementToSlot(sourceSlot, targetSlot, placementId, position, threshold);
+      // 移動先に収まらなければ移動元に留める。
+      if (result.rejected) {
+        this.notice('移動先の荷台に収まらないため、移せません。');
+        this.renderAll();
+        return;
+      }
+
       sourceSlot.placements = result.source;
       targetSlot.placements = result.target;
 
-      this.warnIfTruncated(result.truncated);
+      this.noticeIfTruncated(result.truncated);
       this.activeSlot = targetSlotNumber;
       this.commit(slots);
     },
@@ -402,15 +430,22 @@ export function simulator() {
 
     nudgeSelected(delta) {
       this.withSelected((slot, placement, slots) => {
-        // キー操作は微調整なのでスナップは効かせない（しきい値0）
-        const result = movePlacement(
-          slot,
-          placement.id,
-          { x: placement.x + delta.x, y: placement.y + delta.y },
-          0
+        // 壁の外へは出さない。壁に向かって押し続けると、壁にぴったり付いて止まる。
+        const target = clampToBed(
+          { ...placement, x: placement.x + delta.x, y: placement.y + delta.y },
+          slot
         );
+        if (target.x === placement.x && target.y === placement.y) return;
+
+        // キー操作は微調整なのでスナップは効かせない（しきい値0）
+        const result = movePlacement(slot, placement.id, target, 0);
+        if (result.rejected) {
+          this.notice('他の機材が荷台に収まらなくなるため、これ以上動かせません。');
+          return;
+        }
+
         slot.placements = result.placements;
-        this.warnIfTruncated(result.truncated);
+        this.noticeIfTruncated(result.truncated);
         this.commit(slots);
       });
     },
@@ -418,8 +453,14 @@ export function simulator() {
     rotateSelected() {
       this.withSelected((slot, placement, slots) => {
         const result = rotatePlacement(slot, placement.id);
+        // 隣を押し出すのは許すが、押し出した結果まで含めて収まらなければ回転しない。
+        if (result.rejected) {
+          this.notice('回転させると荷台に収まらないため、回転できません。');
+          return;
+        }
+
         slot.placements = result.placements;
-        this.warnIfTruncated(result.truncated);
+        this.noticeIfTruncated(result.truncated);
         this.commit(slots);
       });
     },
@@ -434,12 +475,12 @@ export function simulator() {
 
     duplicateSelected() {
       this.withSelected((slot, placement, slots) => {
-        const copy = {
-          ...JSON.parse(JSON.stringify(placement)),
-          id: crypto.randomUUID(),
-          x: placement.x + 100,
-          y: placement.y + 100
-        };
+        const copy = duplicatePlacement(slot, placement.id, () => crypto.randomUUID());
+        if (!copy) {
+          this.notice('空きスペースがないため、複製できません。');
+          return;
+        }
+
         slot.placements = [...slot.placements, copy];
         this.selectedId = copy.id;
         this.commit(slots);
@@ -482,10 +523,17 @@ export function simulator() {
       this.renderAll();
     },
 
-    warnIfTruncated(truncated) {
-      this.noticeMessage = truncated
-        ? '配置が詰まっていて押し出しを完了できませんでした。「元に戻す」で直前の状態に戻せます。'
-        : '';
+    /** 通知バナーに出す。空文字を渡すと消える。 */
+    notice(message) {
+      this.noticeMessage = message;
+    },
+
+    noticeIfTruncated(truncated) {
+      this.notice(
+        truncated
+          ? '配置が詰まっていて押し出しを完了できませんでした。「元に戻す」で直前の状態に戻せます。'
+          : ''
+      );
     },
 
     // ---------------- 描画 ----------------
