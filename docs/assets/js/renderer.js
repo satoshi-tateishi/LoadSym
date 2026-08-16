@@ -19,7 +19,7 @@
 // viewBox は実寸mmで取り、CSSの幅でスケールする。つまり「ズーム」は viewBox の
 // 操作だけで済み、描画側は常にmmで考えればよい。
 
-import { toParts, unionOutline } from './geometry.js';
+import { partArea, toParts, unionOutline } from './geometry.js';
 import { bedOf, obstacleRects } from './packing.js';
 
 /**
@@ -76,6 +76,7 @@ export function renderTruck(svg, slot, options = {}) {
   // （呼び出し側に毎回 slot を渡させるより取り違えが起きにくい）。
   svg.dataset.bedWidthMm = bed.w;
   svg.dataset.bedDepthMm = bed.d;
+  svg.dataset.maskNamespace = `slot-${slot.slot}-${slot.id ?? 'local'}`;
 
   // 機材置き場はトラックの荷台と取り違えないよう、破線のグレー枠にする。
   const staging = slot.truck?.kind === 'staging';
@@ -89,7 +90,7 @@ export function renderTruck(svg, slot, options = {}) {
     renderGrid(bed),
     renderObstacles(slot, bed),
     slot.placements
-      .map((placement) => renderPlacement(placement, bed, invalidIds, selectedId))
+      .map((placement) => renderPlacement(placement, bed, invalidIds, selectedId, svg.dataset.maskNamespace))
       .join('')
   ].join('');
 }
@@ -174,7 +175,7 @@ function renderObstacles(slot, bed) {
   return `<g class="obstacles" pointer-events="none">${items.join('')}</g>`;
 }
 
-function renderPlacement(placement, bed, invalidIds, selectedId) {
+function renderPlacement(placement, bed, invalidIds, selectedId, maskNamespace) {
   const drawing = placementDrawing(placement);
   const invalid = invalidIds.has(placement.id);
   const selected = placement.id === selectedId;
@@ -182,6 +183,7 @@ function renderPlacement(placement, bed, invalidIds, selectedId) {
   const fill = invalid ? COLOR_INVALID : placement.snapshot.color;
   const stroke = selected ? '#1d4ed8' : invalid ? '#991b1b' : '#334155';
   const strokeWidth = selected ? 18 : 8;
+  const maskId = maskIdentifier(`${maskNamespace}-${placement.id}`);
 
   // 寸法はシンボルには書かない。枠が小さいと機材名を押しのけて枠からはみ出すうえ、
   // 選択すれば下部の集計パネルに出るため二重に持つ意味がない。
@@ -193,10 +195,12 @@ function renderPlacement(placement, bed, invalidIds, selectedId) {
   return [
     `<g class="placement" data-placement-id="${escapeXml(placement.id)}"`,
     ` transform="${placementTransform(placement, bed)}" style="cursor:grab">`,
+    drawing.hasCurves ? outlineMask(maskId, drawing, strokeWidth) : '',
     `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fill)}"`,
     ` fill-opacity="${invalid ? 0.85 : 0.7}"/>`,
     `<path class="outline" d="${drawing.outlinePath}" fill="none"`,
-    ` stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
+    ` stroke="${stroke}" stroke-width="${drawing.hasCurves ? strokeWidth * 2 : strokeWidth}"`,
+    drawing.hasCurves ? ` mask="url(#${maskId})"/>` : '/>',
     `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#0f172a" text-anchor="middle" dominant-baseline="middle" pointer-events="none">`,
     escapeXml(label.text),
@@ -224,15 +228,63 @@ function placementDrawing(placement) {
     d: box.h
   }));
   const largestIndex = parts.reduce(
-    (best, part, index) => part.w * part.d > parts[best].w * parts[best].d ? index : best,
+    (best, part, index) => partArea(part) > partArea(parts[best]) ? index : best,
     0
   );
+  const fillPath = parts.map((part, index) => partSubpath(part, boxes[index], placement)).join(' ');
+  const hasCurves = parts.some((part) => part.kind !== 'rect');
+  const rawLabelBox = boxes[largestIndex];
+  const labelBox = parts[largestIndex].kind === 'rect' ? rawLabelBox : {
+    x: rawLabelBox.x + rawLabelBox.w * 0.1,
+    y: rawLabelBox.y + rawLabelBox.h * 0.1,
+    w: rawLabelBox.w * 0.8,
+    h: rawLabelBox.h * 0.8
+  };
 
   return {
-    fillPath: boxes.map(rectSubpath).join(' '),
-    outlinePath: unionOutline(outlineParts).map(lineSubpath).join(' '),
-    labelBox: boxes[largestIndex]
+    fillPath,
+    outlinePath: hasCurves ? fillPath : unionOutline(outlineParts).map(lineSubpath).join(' '),
+    labelBox,
+    hasCurves,
+    bounds: boxes.reduce((result, box) => ({
+      x: Math.min(result.x, box.x), y: Math.min(result.y, box.y),
+      right: Math.max(result.right, box.x + box.w), bottom: Math.max(result.bottom, box.y + box.h)
+    }), { x: Infinity, y: Infinity, right: -Infinity, bottom: -Infinity })
   };
+}
+
+function partSubpath(part, box, placement) {
+  if (part.kind === 'circle') {
+    const r = part.w / 2;
+    const cx = part.y - placement.y + r;
+    const cy = -(part.x - placement.x + r);
+    return `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 ${-r * 2} 0 Z`;
+  }
+  if (part.kind === 'polygon') {
+    return part.points.map((point, index) =>
+      `${index === 0 ? 'M' : 'L'} ${point.y - placement.y} ${-(point.x - placement.x)}`
+    ).join(' ') + ' Z';
+  }
+  return rectSubpath(box);
+}
+
+function maskIdentifier(value) {
+  return `outline-${String(value).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+}
+
+function outlineMask(id, drawing, strokeWidth) {
+  const margin = strokeWidth * 2;
+  const x = drawing.bounds.x - margin;
+  const y = drawing.bounds.y - margin;
+  const width = drawing.bounds.right - drawing.bounds.x + margin * 2;
+  const height = drawing.bounds.bottom - drawing.bounds.y + margin * 2;
+  // maskUnits="userSpaceOnUse" では x/y/width/height を省略すると既定値がビューポートの
+  // 百分率で解決され、ローカル座標が負の側へ伸びる機材の外周線が切り落とされる。
+  // マスク領域は必ず形の外形（＋線幅ぶんの余白）で明示すること。
+  return `<defs><mask id="${id}" maskUnits="userSpaceOnUse"` +
+    ` x="${x}" y="${y}" width="${width}" height="${height}">` +
+    `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="#fff"/>` +
+    `<path d="${drawing.fillPath}" fill="#000"/></mask></defs>`;
 }
 
 function rectSubpath(box) {
@@ -367,6 +419,7 @@ export function showDropGhost(svg, placement) {
   existing?.remove();
 
   const drawing = placementDrawing(placement);
+  const maskId = maskIdentifier(`ghost-${svg.dataset.maskNamespace}-${placement.id}`);
   const label = chooseLabel(placement.snapshot.name, drawing.labelBox);
   const cx = drawing.labelBox.x + drawing.labelBox.w / 2;
   const cy = drawing.labelBox.y + drawing.labelBox.h / 2;
@@ -375,10 +428,12 @@ export function showDropGhost(svg, placement) {
   svg.insertAdjacentHTML('beforeend', [
     `<g class="drop-ghost" data-placement-id="${escapeXml(placement.id)}"`,
     ` transform="${placementTransform(placement, bed)}" pointer-events="none">`,
+    drawing.hasCurves ? outlineMask(maskId, drawing, 14) : '',
     `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(placement.snapshot.color)}"`,
     ` fill-opacity="0.35"/>`,
     `<path class="outline" d="${drawing.outlinePath}" fill="none" stroke="#1d4ed8"`,
-    ` stroke-width="14" stroke-dasharray="90 60"/>`,
+    ` stroke-width="${drawing.hasCurves ? 28 : 14}" stroke-dasharray="90 60"`,
+    drawing.hasCurves ? ` mask="url(#${maskId})"/>` : '/>',
     `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#1e293b" fill-opacity="0.7" text-anchor="middle" dominant-baseline="middle">`,
     escapeXml(label.text),

@@ -75,6 +75,15 @@ console.log('# summarize');
   eq('矩形のみなら従来どおり外形面積', rectangular.usedAreaMm2, 100 * 100);
 }
 {
+  const circle = snapshot('円柱', 100, 100, 500, 10);
+  circle.shape = { parts: [{ kind: 'circle', cx: 50, cy: 50, r: 50 }] };
+  const summary = summarize(makeSlot([
+    { id: 'circle', snapshot: circle, x: 10, y: 10, rotation: 0 }
+  ]));
+  eq('円の占有面積は実面積', summary.usedAreaMm2, Math.PI * 50 * 50);
+  eq('円の配置率は外接矩形より下がる', summary.floorAreaRatio < 10000 / (1700 * 4400), true);
+}
+{
   const slot = makeSlot([
     { id: 'p1', snapshot: snapshot('重量物', 600, 800, 1200, 1500), x: 10, y: 10, rotation: 0 },
     { id: 'p2', snapshot: snapshot('重量物', 600, 800, 2000, 900), x: 10, y: 900, rotation: 0 }
@@ -104,6 +113,17 @@ console.log('# rotatePlacement');
 }
 
 console.log('# movePlacement');
+{
+  const circle = snapshot('円柱', 100, 100, 500, 10);
+  circle.shape = { parts: [{ kind: 'circle', cx: 50, cy: 50, r: 50 }] };
+  const slot = makeSlot([
+    { id: 'c1', snapshot: circle, x: 10, y: 10, rotation: 0 },
+    { id: 'c2', snapshot: circle, x: 80, y: 80, rotation: 0 }
+  ]);
+  const result = movePlacement(slot, 'c1', { x: 10, y: 10 }, 0);
+  eq('円を含む押し出しが収束する', result.truncated, false);
+  eq('円の押し出し後に干渉が残らない', summarize({ ...slot, placements: result.placements }, 0).invalidCount, 0);
+}
 {
   const slot = makeSlot([
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 800, y: 800, rotation: 0 }

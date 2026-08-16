@@ -47,27 +47,43 @@ export function toRect(placement) {
 }
 
 /**
- * shape を有効な軸平行矩形の配列に正規化する。
- * 未知の kind は将来形式として無視し、有効な矩形が残らない場合や shape 自体が
- * 壊れている場合は、外形サイズと同じ矩形1枚へフォールバックする。
+ * shape を kind と bbox を必ず持つパーツ配列へ正規化する。
+ * 壊れたパーツが1つでもあれば、図を出せなくしないため外形矩形1枚へフォールバックする。
  */
 export function normalizeShape(shape, widthMm, depthMm) {
-  const fallback = [{ x: 0, y: 0, w: widthMm, d: depthMm }];
+  const fallback = [{ kind: 'rect', x: 0, y: 0, w: widthMm, d: depthMm }];
   if (!Array.isArray(shape?.parts) || shape.parts.length === 0) return fallback;
 
-  const rects = shape.parts.filter((part) => part?.kind === 'rect');
-  const hasInvalidRect = rects.some((part) =>
-    !Number.isFinite(part.x) ||
-    !Number.isFinite(part.y) ||
-    !Number.isFinite(part.w) ||
-    !Number.isFinite(part.d) ||
-    part.w <= 0 ||
-    part.d <= 0
-  );
-  if (hasInvalidRect) return fallback;
-
-  const parts = rects.map((part) => ({ x: part.x, y: part.y, w: part.w, d: part.d }));
-
+  const parts = [];
+  for (const part of shape.parts) {
+    if (part?.kind === 'rect') {
+      if (![part.x, part.y, part.w, part.d].every(Number.isFinite) || part.w <= 0 || part.d <= 0) {
+        return fallback;
+      }
+      parts.push({ kind: 'rect', x: part.x, y: part.y, w: part.w, d: part.d });
+      continue;
+    }
+    if (part?.kind === 'circle') {
+      if (![part.cx, part.cy, part.r].every(Number.isFinite) || part.r <= 0) return fallback;
+      parts.push({ kind: 'circle', x: part.cx - part.r, y: part.cy - part.r, w: part.r * 2, d: part.r * 2 });
+      continue;
+    }
+    if (part?.kind === 'polygon') {
+      const points = Array.isArray(part.points)
+        ? part.points.map((point) => ({ x: point?.x, y: point?.y }))
+        : [];
+      if (points.length < 3 || points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y)) ||
+          !isConvex(points)) return fallback;
+      const minX = Math.min(...points.map((point) => point.x));
+      const minY = Math.min(...points.map((point) => point.y));
+      const maxX = Math.max(...points.map((point) => point.x));
+      const maxY = Math.max(...points.map((point) => point.y));
+      if (maxX <= minX || maxY <= minY) return fallback;
+      parts.push({ kind: 'polygon', x: minX, y: minY, w: maxX - minX, d: maxY - minY, points });
+      continue;
+    }
+    return fallback;
+  }
   return parts.length > 0 ? parts : fallback;
 }
 
@@ -106,14 +122,30 @@ export function toParts(placement) {
         transformed = { x: px, y: py, w: pw, d: pd };
     }
 
-    return {
+    const result = {
       id: placement.id,
       partIndex,
+      kind: part.kind,
       x: placement.x + transformed.x,
       y: placement.y + transformed.y,
       w: transformed.w,
       d: transformed.d
     };
+    if (part.kind === 'polygon') {
+      result.points = part.points.map((point) => {
+        const pointX = point.x - localBounds.x;
+        const pointY = point.y - localBounds.y;
+        let mapped;
+        switch (rotation) {
+          case 90: mapped = { x: d0 - pointY, y: pointX }; break;
+          case 180: mapped = { x: w0 - pointX, y: d0 - pointY }; break;
+          case 270: mapped = { x: pointY, y: w0 - pointX }; break;
+          default: mapped = { x: pointX, y: pointY };
+        }
+        return { x: placement.x + mapped.x, y: placement.y + mapped.y };
+      });
+    }
+    return result;
   });
 }
 
@@ -223,10 +255,142 @@ export function rectsOverlap(a, b, gap = 0) {
   );
 }
 
+/**
+ * パーツ形状を厳密に比較する。矩形どうしだけは既存どおり軸ごとの隙間（L∞）を使う。
+ * 曲線や斜辺を含む組はユークリッド距離になるが、矩形の経路まで変えると既存の
+ * 吸着位置とエラー判定がずれるため、意図して揃えていない。
+ */
+export function partsOverlap(a, b, gap = 0) {
+  const kindA = a.kind ?? 'rect';
+  const kindB = b.kind ?? 'rect';
+  if (kindA === 'rect' && kindB === 'rect') return rectsOverlap(a, b, gap);
+  if (!rectsOverlap(a, b, gap)) return false;
+
+  if (kindA === 'circle' && kindB === 'circle') {
+    const ac = circleOf(a), bc = circleOf(b);
+    return Math.hypot(ac.x - bc.x, ac.y - bc.y) - ac.r - bc.r < gap;
+  }
+  if (kindA === 'circle' || kindB === 'circle') {
+    const circle = kindA === 'circle' ? a : b;
+    const polygon = toConvexPoints(kindA === 'circle' ? b : a);
+    const center = circleOf(circle);
+    return pointToPolygonDistance(center, polygon) - center.r < gap;
+  }
+
+  const polyA = toConvexPoints(a);
+  const polyB = toConvexPoints(b);
+  if (polygonsIntersect(polyA, polyB)) return true;
+  let distance = Infinity;
+  for (let i = 0; i < polyA.length; i += 1) {
+    for (let j = 0; j < polyB.length; j += 1) {
+      distance = Math.min(distance, segmentDistance(
+        polyA[i], polyA[(i + 1) % polyA.length], polyB[j], polyB[(j + 1) % polyB.length]
+      ));
+    }
+  }
+  return distance < gap;
+}
+
+function circleOf(part) {
+  return { x: part.x + part.w / 2, y: part.y + part.d / 2, r: part.w / 2 };
+}
+
+function toConvexPoints(part) {
+  if ((part.kind ?? 'rect') === 'polygon') return part.points;
+  return [
+    { x: part.x, y: part.y }, { x: part.x + part.w, y: part.y },
+    { x: part.x + part.w, y: part.y + part.d }, { x: part.x, y: part.y + part.d }
+  ];
+}
+
+export function isConvex(points) {
+  if (!Array.isArray(points) || points.length < 3) return false;
+  if (new Set(points.map((point) => `${point.x},${point.y}`)).size !== points.length) return false;
+  let sign = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i], b = points[(i + 1) % points.length], c = points[(i + 2) % points.length];
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(cross) < 1e-9) continue;
+    const current = Math.sign(cross);
+    if (sign && current !== sign) return false;
+    sign = current;
+  }
+  return sign !== 0;
+}
+
+function polygonsIntersect(a, b) {
+  for (const polygon of [a, b]) {
+    for (let i = 0; i < polygon.length; i += 1) {
+      const p1 = polygon[i], p2 = polygon[(i + 1) % polygon.length];
+      const axis = { x: -(p2.y - p1.y), y: p2.x - p1.x };
+      const pa = a.map((point) => point.x * axis.x + point.y * axis.y);
+      const pb = b.map((point) => point.x * axis.x + point.y * axis.y);
+      // 接するだけなら重なりではない。矩形の既存挙動と揃える。
+      if (Math.max(...pa) <= Math.min(...pb) || Math.max(...pb) <= Math.min(...pa)) return false;
+    }
+  }
+  return true;
+}
+
+function pointToPolygonDistance(point, polygon) {
+  let inside = true;
+  let sign = 0;
+  let distance = Infinity;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i], b = polygon[(i + 1) % polygon.length];
+    const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+    if (Math.abs(cross) > 1e-9) {
+      if (!sign) sign = Math.sign(cross);
+      else if (Math.sign(cross) !== sign) inside = false;
+    }
+    distance = Math.min(distance, pointToSegmentDistance(point, a, b));
+  }
+  return inside ? 0 : distance;
+}
+
+function pointToSegmentDistance(point, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const length2 = dx * dx + dy * dy;
+  if (length2 === 0) return Math.hypot(point.x - a.x, point.y - a.y);
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length2));
+  return Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+}
+
+function segmentDistance(a1, a2, b1, b2) {
+  if (segmentsIntersect(a1, a2, b1, b2)) return 0;
+  return Math.min(
+    pointToSegmentDistance(a1, b1, b2), pointToSegmentDistance(a2, b1, b2),
+    pointToSegmentDistance(b1, a1, a2), pointToSegmentDistance(b2, a1, a2)
+  );
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const cross = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const abC = cross(a, b, c), abD = cross(a, b, d), cdA = cross(c, d, a), cdB = cross(c, d, b);
+  if (abC * abD < 0 && cdA * cdB < 0) return true;
+  const onSegment = (p, q, r) => Math.abs(cross(p, q, r)) < 1e-9 &&
+    r.x >= Math.min(p.x, q.x) && r.x <= Math.max(p.x, q.x) &&
+    r.y >= Math.min(p.y, q.y) && r.y <= Math.max(p.y, q.y);
+  return onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b);
+}
+
+/** パーツの実面積を返す。 */
+export function partArea(part) {
+  if ((part.kind ?? 'rect') === 'circle') return Math.PI * (part.w / 2) ** 2;
+  if (part.kind === 'polygon') {
+    const twice = part.points.reduce((sum, point, index) => {
+      const next = part.points[(index + 1) % part.points.length];
+      return sum + point.x * next.y - next.x * point.y;
+    }, 0);
+    return Math.abs(twice) / 2;
+  }
+  return part.w * part.d;
+}
+
 /** 2つの形に、指定間隔を割り込むパーツ対が1組でもあるか。 */
 export function shapesOverlap(a, b, gap = 0) {
   return a.parts.some((partA) =>
-    b.parts.some((partB) => rectsOverlap(partA, partB, gap))
+    b.parts.some((partB) => partsOverlap(partA, partB, gap))
   );
 }
 
@@ -416,12 +580,14 @@ function computePush(pusher, target, {
   const overlappingPairs = [];
   for (const pusherPart of pusher.parts) {
     for (const targetPart of target.parts) {
-      if (rectsOverlap(pusherPart, targetPart, trigger)) {
+      if (partsOverlap(pusherPart, targetPart, trigger)) {
         overlappingPairs.push([pusherPart, targetPart]);
       }
     }
   }
-  if (overlappingPairs.length === 0) return null;
+  // 呼び出し元と同じ partsOverlap で拾うため通常は空にならないが、
+  // 空のまま null を返すと押し出しが止まって重なりが残る。保険として bbox 全体を1組にする。
+  if (overlappingPairs.length === 0) overlappingPairs.push([boundsOf(pusher.parts), boundsOf(target.parts)]);
 
   // 1組だけを基準にすると別のパーツが食い込んだまま残る。各方向について、
   // 重なっている全パーツ対を抜けるのに必要な最大の移動量を採る。
@@ -480,13 +646,19 @@ function translateShape(shape, dx, dy) {
   for (const part of shape.parts) {
     part.x += dx;
     part.y += dy;
+    if (part.points) part.points = part.points.map((point) => ({ x: point.x + dx, y: point.y + dy }));
   }
 }
 
 function movedShape(shape, dx, dy) {
   return {
     ...shape,
-    parts: shape.parts.map((part) => ({ ...part, x: part.x + dx, y: part.y + dy }))
+    parts: shape.parts.map((part) => ({
+      ...part,
+      x: part.x + dx,
+      y: part.y + dy,
+      points: part.points?.map((point) => ({ x: point.x + dx, y: point.y + dy }))
+    }))
   };
 }
 
@@ -562,7 +734,8 @@ export function findFreeSpot(parts, occupied, bed, obstacles = [], clearanceMm =
   const localParts = parts.map((part) => ({
     ...part,
     x: part.x - localBounds.x,
-    y: part.y - localBounds.y
+    y: part.y - localBounds.y,
+    points: part.points?.map((point) => ({ x: point.x - localBounds.x, y: point.y - localBounds.y }))
   }));
   const blockerParts = blockers.flatMap((shape) => shape.parts);
   const xs = edgeCandidates(
@@ -584,7 +757,12 @@ export function findFreeSpot(parts, occupied, bed, obstacles = [], clearanceMm =
       if (x + localBounds.w > bed.w) continue;
       const candidate = {
         id: '__candidate__',
-        parts: localParts.map((part) => ({ ...part, x: x + part.x, y: y + part.y }))
+        parts: localParts.map((part) => ({
+          ...part,
+          x: x + part.x,
+          y: y + part.y,
+          points: part.points?.map((point) => ({ x: x + point.x, y: y + point.y }))
+        }))
       };
       const collides = blockers.some((other) => shapesOverlap(candidate, other, clearanceMm));
       if (!collides) return { x, y };

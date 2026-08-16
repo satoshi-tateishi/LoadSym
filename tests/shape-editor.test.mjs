@@ -58,6 +58,45 @@ console.log('# prepareEquipmentShape');
   const target = { width_mm: 20001, depth_mm: 400, shape: null };
   throws('寸法上限を超えた矩形を棄却', () => prepareEquipmentShape(target), /1〜20000mm/);
 }
+{
+  const target = form([{ kind: 'circle', cx: 300, cy: 400, r: 200 }]);
+  prepareEquipmentShape(target);
+  eq('円のbboxを書き戻して円心を原点合わせ', target, {
+    width_mm: 400, depth_mm: 400,
+    shape: { parts: [{ kind: 'circle', cx: 200, cy: 200, r: 200 }] }
+  });
+}
+{
+  const target = form([{ kind: 'polygon', points: [
+    { x: 100, y: 200 }, { x: 500, y: 200 }, { x: 400, y: 600 }, { x: 100, y: 500 }
+  ] }]);
+  prepareEquipmentShape(target);
+  eq('多角形のbboxを書き戻して頂点を原点合わせ', target, {
+    width_mm: 400, depth_mm: 400,
+    shape: { parts: [{ kind: 'polygon', points: [
+      { x: 0, y: 0 }, { x: 400, y: 0 }, { x: 300, y: 400 }, { x: 0, y: 300 }
+    ] }] }
+  });
+}
+{
+  throws('半径0の円を棄却', () => prepareEquipmentShape(form([
+    { kind: 'circle', cx: 10, cy: 10, r: 0 }
+  ])), /半径/);
+  throws('頂点不足の多角形を棄却', () => prepareEquipmentShape(form([
+    { kind: 'polygon', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }
+  ])), /3点以上/);
+  throws('凹多角形を棄却', () => prepareEquipmentShape(form([
+    { kind: 'polygon', points: [
+      { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 40, y: 40 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+    ] }
+  ])), /凸形状/);
+}
+{
+  throws('円と矩形の混在重なりを棄却', () => prepareEquipmentShape(form([
+    { kind: 'circle', cx: 100, cy: 100, r: 80 },
+    { kind: 'rect', x: 150, y: 50, w: 100, d: 100 }
+  ])), /パーツ 1 と 2/);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

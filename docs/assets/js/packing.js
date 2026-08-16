@@ -12,7 +12,7 @@
 
 import {
   toParts, toShape, rectToShape, boundsOf, resolveOverlaps, findInvalidShapes,
-  snapPosition, findFreeSpot,
+  snapPosition, findFreeSpot, partArea,
   DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM
 } from './geometry.js';
 
@@ -364,7 +364,7 @@ export function summarize(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
 
   const bedArea = bed.w * bed.d;
   const usedArea = shapes.reduce(
-    (total, shape) => total + shape.parts.reduce((sum, part) => sum + part.w * part.d, 0),
+    (total, shape) => total + shape.parts.reduce((sum, part) => sum + partArea(part), 0),
     0
   );
   const totalWeightKg = slot.placements.reduce(
