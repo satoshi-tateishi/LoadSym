@@ -179,7 +179,10 @@
               </td>
               <td class="px-3 py-2 text-gray-600" x-text="item.categoryName"></td>
               <td class="px-3 py-2 text-right tabular-nums"
-                  x-text="`${item.width_mm}×${item.depth_mm}×${item.height_mm}`"></td>
+                  >
+                <span x-text="`${item.width_mm}×${item.depth_mm}×${item.height_mm}`"></span>
+                <span x-show="item.shape" class="ml-1 rounded bg-indigo-100 px-1 py-0.5 text-[9px] text-indigo-700">異形</span>
+              </td>
               <td class="px-3 py-2 text-right tabular-nums" x-text="item.weight_kg + ' kg'"></td>
               <td class="px-3 py-2 text-right whitespace-nowrap">
                 <button type="button" class="px-1 disabled:opacity-20" title="上へ"
@@ -309,7 +312,7 @@
   <!-- ============ テンプレート機材フォーム ============ -->
   <div x-show="equipmentForm" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50"
        @click.self="equipmentForm = null">
-    <form x-show="equipmentForm" class="bg-white rounded-lg shadow-lg w-full max-w-md p-5 space-y-3"
+    <form x-show="equipmentForm" class="bg-white rounded-lg shadow-lg w-full max-w-4xl p-5 space-y-3 max-h-[95vh] overflow-y-auto"
           @submit.prevent="saveEquipment()">
       <template x-if="equipmentForm">
         <div class="space-y-3">
@@ -329,15 +332,62 @@
           <div class="grid grid-cols-3 gap-2">
             <div>
               <label class="block text-xs mb-1">幅 mm</label>
-              <input type="number" min="1" x-model.number="equipmentForm.width_mm" required class="w-full border rounded px-2 py-1 text-sm">
+              <input type="number" min="1" max="20000" x-model.number="equipmentForm.width_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
             <div>
               <label class="block text-xs mb-1">奥行 mm</label>
-              <input type="number" min="1" x-model.number="equipmentForm.depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
+              <input type="number" min="1" max="20000" x-model.number="equipmentForm.depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
             <div>
               <label class="block text-xs mb-1">高さ mm</label>
               <input type="number" min="1" x-model.number="equipmentForm.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
+            </div>
+          </div>
+          <!-- shapeEditor はシミュレーターと共有。フォームの shape を直接読み書きする。 -->
+          <div x-data="shapeEditor(equipmentForm)" @keydown.window="deleteByKey($event)">
+            <div class="flex items-center gap-2 rounded border bg-gray-50 px-3 py-2">
+              <div class="min-w-0">
+                <p class="text-xs font-bold">平面形状</p>
+                <p class="text-[10px] text-gray-500" x-text="equipmentForm.shape ? `矩形パーツ形状（外形 ${equipmentForm.width_mm} × ${equipmentForm.depth_mm} mm）` : '通常の矩形'"></p>
+              </div>
+              <span x-show="equipmentForm.shape" class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-700">異形</span>
+              <button type="button" class="ml-auto rounded border bg-white px-2 py-1 text-xs text-blue-600" @click="openEditor()">形を編集</button>
+            </div>
+            <div x-show="open" class="mt-2 rounded border p-3" @click.stop>
+              <div class="mb-2 flex flex-wrap items-center gap-2">
+                <button type="button" class="rounded border px-2 py-1 text-xs" :class="tool === 'select' ? 'bg-blue-600 text-white' : 'bg-white'" @click="tool = 'select'">選択・移動</button>
+                <button type="button" class="rounded border px-2 py-1 text-xs" :class="tool === 'rect' ? 'bg-blue-600 text-white' : 'bg-white'" @click="tool = 'rect'">＋ 矩形</button>
+                <span class="text-[10px] text-gray-500">100mmグリッド（Shiftを押している間は10mm）</span>
+                <span class="ml-auto text-xs font-bold tabular-nums" x-text="`外形 幅 × 奥行: ${previewSize}`"></span>
+              </div>
+              <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_18rem]">
+                <div>
+                  <div class="relative rounded border bg-white p-5">
+                    <span class="absolute left-1 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] text-gray-500">幅 x（下が0）</span>
+                    <span class="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] text-gray-500">奥行 y（左が0）→</span>
+                    <svg x-ref="canvas" class="block aspect-[2/1] w-full touch-none bg-slate-50" :viewBox="viewBox" preserveAspectRatio="xMidYMid meet"
+                         @pointerdown="canvasPointerDown($event)" @pointermove="pointerMove($event)" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event)">
+                      <defs><pattern id="shape-grid-admin" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#cbd5e1" stroke-width="3"/></pattern></defs>
+                      <rect width="100%" height="100%" fill="url(#shape-grid-admin)"/>
+                      <template x-for="(part, index) in parts" :key="index">
+                        <rect :x="rectBox(part).x" :y="rectBox(part).y" :width="rectBox(part).w" :height="rectBox(part).h" :fill="selectedIndex === index ? '#93c5fd' : '#cbd5e1'" fill-opacity="0.8" :stroke="selectedIndex === index ? '#1d4ed8' : '#475569'" stroke-width="8" @pointerdown="partPointerDown($event, index)"/>
+                      </template>
+                      <rect x-show="draft" :x="draft ? rectBox(draft).x : 0" :y="draft ? rectBox(draft).y : 0" :width="draft ? rectBox(draft).w : 0" :height="draft ? rectBox(draft).h : 0" fill="#bfdbfe" fill-opacity="0.6" stroke="#2563eb" stroke-width="8" stroke-dasharray="30 20"/>
+                    </svg>
+                  </div>
+                </div>
+                <div class="max-h-72 overflow-y-auto">
+                  <div class="mb-1 grid grid-cols-[1fr_1fr_1fr_1fr_1.5rem] gap-1 text-center text-[10px] text-gray-500"><span>X</span><span>Y</span><span>幅</span><span>奥行</span><span></span></div>
+                  <template x-for="(part, index) in parts" :key="index">
+                    <div class="mb-1 grid grid-cols-[1fr_1fr_1fr_1fr_1.5rem] gap-1" :class="selectedIndex === index ? 'rounded bg-blue-50' : ''" @click="selectedIndex = index">
+                      <input type="number" min="-20000" max="20000" :value="part.x" @change="updatePart(index, 'x', $event.target.value)" class="min-w-0 rounded border px-1 py-1 text-xs"><input type="number" min="-20000" max="20000" :value="part.y" @change="updatePart(index, 'y', $event.target.value)" class="min-w-0 rounded border px-1 py-1 text-xs"><input type="number" min="1" max="20000" :value="part.w" @change="updatePart(index, 'w', $event.target.value)" class="min-w-0 rounded border px-1 py-1 text-xs"><input type="number" min="1" max="20000" :value="part.d" @change="updatePart(index, 'd', $event.target.value)" class="min-w-0 rounded border px-1 py-1 text-xs"><button type="button" class="text-sm text-red-600" title="削除" @click="removePart(index)">×</button>
+                    </div>
+                  </template>
+                  <p x-show="parts.length === 0" class="rounded bg-amber-50 p-2 text-xs text-amber-800">「＋ 矩形」を選び、キャンバスをドラッグして追加してください。</p>
+                </div>
+              </div>
+              <p x-show="error" class="mt-2 rounded bg-red-50 p-2 text-xs text-red-700" x-text="error"></p>
+              <div class="mt-3 flex flex-wrap gap-2"><button type="button" class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white" @click="apply()">形を反映</button><button type="button" class="rounded border px-3 py-1.5 text-xs" @click="closeEditor()">閉じる</button><button type="button" class="ml-auto rounded border border-red-300 px-3 py-1.5 text-xs text-red-600" @click="resetToRectangle()">矩形に戻す</button></div>
             </div>
           </div>
           <div>

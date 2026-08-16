@@ -28,6 +28,10 @@ import {
   showDropGhost, clearDropGhost, dimPlacement
 } from '../renderer.js';
 import { downloadSvgAsPng } from '../export-png.js';
+import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
+
+// 機材フォーム内の共有Alpineコンポーネントから参照する。
+window.shapeEditor = shapeEditor;
 
 /**
  * 荷台の表示高さの目安(px)。荷台は横向きに描くので、高さを揃えて横に伸ばす。
@@ -725,7 +729,7 @@ export function simulator() {
 
     openEquipmentForm(item) {
       this.equipmentForm = item
-        ? { ...item, asTemplate: item.user_id === null }
+        ? { ...item, shape: item.shape ? JSON.parse(JSON.stringify(item.shape)) : null, asTemplate: item.user_id === null }
         : {
             id: null,
             name: '',
@@ -735,6 +739,7 @@ export function simulator() {
             height_mm: 500,
             weight_kg: 0,
             color: PALETTE[0].hex,
+            shape: null,
             asTemplate: false
           };
     },
@@ -744,6 +749,7 @@ export function simulator() {
       this.errorMessage = '';
       try {
         const form = this.equipmentForm;
+        prepareEquipmentShape(form);
         const values = {
           name: form.name,
           category_id: form.category_id || this.defaultCategoryId,
@@ -751,7 +757,8 @@ export function simulator() {
           depth_mm: form.depth_mm,
           height_mm: form.height_mm,
           weight_kg: form.weight_kg ?? 0,
-          color: form.color
+          color: form.color,
+          shape: form.shape
         };
 
         if (form.id) {
