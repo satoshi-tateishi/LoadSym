@@ -293,8 +293,11 @@ function bedOfSvg(svg) {
 export function updatePlacementPosition(svg, placement) {
   const group = svg.querySelector(`[data-placement-id="${CSS.escape(placement.id)}"]`);
   if (!group) return;
+  moveBox(group, toViewRect(bedOfSvg(svg), toRect(placement)));
+}
 
-  const box = toViewRect(bedOfSvg(svg), toRect(placement));
+/** 枠と機材名を、与えたビュー座標の矩形へ移す。大きさが変わらない移動にだけ使う。 */
+function moveBox(group, box) {
   const frame = group.querySelector('rect');
   const label = group.querySelector('text');
 
@@ -312,6 +315,60 @@ export function updatePlacementPosition(svg, placement) {
   if (label.hasAttribute('transform')) {
     label.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
   }
+}
+
+/**
+ * 別のエリアへドラッグしている最中に、移動先の「ここに載る」位置を示すゴースト。
+ *
+ * ドラッグ中の機材は掴んだエリアの中でしか動かせない（ポインタキャプチャを
+ * 維持するため、また壁で止める必要があるため）ので、エリアをまたぐ移動では
+ * 落とすまで着地点が分からない。そこで移動先に破線の影を出して先に見せる。
+ *
+ * 実物ではないことが一目で分かるよう、塗りは薄く枠は破線にする。
+ * placement は移動先の荷台座標に直したものを渡すこと。
+ */
+export function showDropGhost(svg, placement) {
+  const box = toViewRect(bedOfSvg(svg), toRect(placement));
+  const existing = svg.querySelector('g.drop-ghost');
+
+  // 同じ機材のゴーストが既にあるなら座標だけ動かす。作り直すと
+  // 1回のドラッグで何十回もDOMを組み立てることになる。
+  if (existing && existing.dataset.placementId === placement.id) {
+    moveBox(existing, box);
+    return;
+  }
+  existing?.remove();
+
+  const label = chooseLabel(placement.snapshot.name, box);
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const transform = label.vertical ? ` transform="rotate(-90 ${cx} ${cy})"` : '';
+
+  svg.insertAdjacentHTML('beforeend', [
+    `<g class="drop-ghost" data-placement-id="${escapeXml(placement.id)}" pointer-events="none">`,
+    `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"`,
+    ` fill="${escapeXml(placement.snapshot.color)}" fill-opacity="0.35"`,
+    ` stroke="#1d4ed8" stroke-width="14" stroke-dasharray="90 60"/>`,
+    `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
+    ` fill="#1e293b" fill-opacity="0.7" text-anchor="middle" dominant-baseline="middle">`,
+    escapeXml(label.text),
+    '</text>',
+    '</g>'
+  ].join(''));
+}
+
+/** 移動先のゴーストを消す。ドラッグが終わったときと、移動先が変わったときに呼ぶ。 */
+export function clearDropGhost(svg) {
+  svg.querySelector('g.drop-ghost')?.remove();
+}
+
+/**
+ * 移動元の機材を薄くする。移動先にゴーストを出している間、どちらが実体か
+ * 迷わないよう「こちらは出ていく」と示すために使う。
+ */
+export function dimPlacement(svg, placementId, dimmed) {
+  const group = svg.querySelector(`[data-placement-id="${CSS.escape(placementId)}"]`);
+  if (group) group.style.opacity = dimmed ? '0.3' : '';
 }
 
 /**

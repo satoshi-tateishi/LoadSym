@@ -23,8 +23,10 @@ import {
 } from '../packing.js';
 import { DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM, MAX_SETTING_CLEARANCE_MM }
   from '../geometry.js';
-import { renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM, viewSize }
-  from '../renderer.js';
+import {
+  renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM, viewSize,
+  showDropGhost, clearDropGhost, dimPlacement
+} from '../renderer.js';
 import { downloadSvgAsPng } from '../export-png.js';
 
 /**
@@ -291,6 +293,29 @@ export function simulator() {
 
       svg.setPointerCapture(event.pointerId);
       let moved = false;
+      /** 移動先のゴーストを描いているSVG。移動先が変わったら消して描き直す。 */
+      let ghostSvg = null;
+
+      /**
+       * 移動先エリアに着地点のゴーストを出す。掴んだエリアの上にいる間と
+       * エリアの外にいる間は出さない（そこは実物がそのまま追従している）。
+       */
+      const updateGhost = (clientX, clientY, dropSlot) => {
+        const targetSvg = dropSlot === null || dropSlot === working.slot
+          ? null
+          : document.querySelector(`svg[data-slot="${dropSlot}"]`);
+
+        if (ghostSvg && ghostSvg !== targetSvg) clearDropGhost(ghostSvg);
+        ghostSvg = targetSvg;
+        dimPlacement(svg, placementId, targetSvg !== null);
+        if (!targetSvg) return;
+
+        const targetSlot = slots.find((item) => item.slot === dropSlot);
+        const landing = this.landingPosition(
+          targetSvg, targetSlot, placement, clientX, clientY, offset
+        );
+        showDropGhost(targetSvg, { ...placement, ...landing });
+      };
 
       const onMove = (moveEvent) => {
         const point = clientToBed(svg, moveEvent.clientX, moveEvent.clientY);
@@ -308,6 +333,7 @@ export function simulator() {
         // どのエリアに落ちるかを先に見せる。ポインタキャプチャ中でも
         // elementFromPoint はポインタ直下の要素を返すので判定に使える。
         this.dropTarget = this.stageSlotAt(moveEvent.clientX, moveEvent.clientY);
+        updateGhost(moveEvent.clientX, moveEvent.clientY, this.dropTarget);
       };
 
       const onUp = (upEvent) => {
@@ -316,6 +342,8 @@ export function simulator() {
         svg.removeEventListener('pointerup', onUp);
         svg.removeEventListener('pointercancel', onUp);
         this.dropTarget = null;
+        if (ghostSvg) clearDropGhost(ghostSvg);
+        dimPlacement(svg, placementId, false);
 
         if (!moved) {
           this.renderAll();
@@ -370,17 +398,38 @@ export function simulator() {
       return stage ? Number(stage.dataset.slot) : null;
     },
 
+    /**
+     * ポインタの位置から、移動先エリアでの着地点(荷台のmm座標)を求める。
+     *
+     * 掴んだ位置のオフセットは荷台のmm座標なので、別のエリアでもそのまま使える。
+     * 移動先の壁の外へは出さない。同じエリア内のドラッグと同じ扱いにすることで、
+     * 端で落としたときに「収まらない」と弾かれず、壁にぴったり付いて止まる。
+     *
+     * ゴーストの描画と実際の移動で同じ計算を使うこと。見せた位置と落ちる位置が
+     * ずれると、プレビューが当てにならなくなる。
+     */
+    landingPosition(targetSvg, targetSlot, placement, clientX, clientY, offset) {
+      const point = clientToBed(targetSvg, clientX, clientY);
+      return clampToBed(
+        { ...placement, x: point.x - offset.x, y: point.y - offset.y },
+        targetSlot,
+        this.clearanceMm
+      );
+    },
+
     /** 別のエリアへ移す。掴んだ位置のオフセットを保ったまま移動先の座標へ変換する。 */
     dropIntoSlot(slots, sourceSlot, targetSlotNumber, placementId, upEvent, offset) {
       const targetSlot = slots.find((item) => item.slot === targetSlotNumber);
       const targetSvg = document.querySelector(`svg[data-slot="${targetSlotNumber}"]`);
-      if (!targetSlot || !targetSvg) {
+      const moving = sourceSlot.placements.find((item) => item.id === placementId);
+      if (!targetSlot || !targetSvg || !moving) {
         this.renderAll();
         return;
       }
 
-      const point = clientToBed(targetSvg, upEvent.clientX, upEvent.clientY);
-      const position = { x: point.x - offset.x, y: point.y - offset.y };
+      const position = this.landingPosition(
+        targetSvg, targetSlot, moving, upEvent.clientX, upEvent.clientY, offset
+      );
       const threshold = SNAP_PIXELS * mmPerPixel(targetSvg);
 
       const result = movePlacementToSlot(
