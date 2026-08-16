@@ -253,15 +253,15 @@
     <form x-show="equipmentForm" class="bg-white rounded-lg shadow-lg w-full max-w-4xl p-5 space-y-3 max-h-[95vh] overflow-y-auto"
           @submit.prevent="saveEquipment()">
       <template x-if="equipmentForm">
-        <div class="space-y-3">
-          <h3 class="font-bold" x-text="equipmentForm.id ? '機材を編集' : '機材を追加'"></h3>
+        <div x-data="{ form: equipmentForm }" class="space-y-3">
+          <h3 class="font-bold" x-text="form.id ? '機材を編集' : '機材を追加'"></h3>
           <div>
             <label class="block text-xs mb-1">名称</label>
-            <input x-model="equipmentForm.name" required class="w-full border rounded px-2 py-1 text-sm">
+            <input x-model="form.name" required class="w-full border rounded px-2 py-1 text-sm">
           </div>
           <div>
             <label class="block text-xs mb-1">カテゴリ</label>
-            <select x-model="equipmentForm.category_id" required class="w-full border rounded px-2 py-1 text-sm">
+            <select x-model="form.category_id" required class="w-full border rounded px-2 py-1 text-sm">
               <template x-for="category in categories" :key="category.id">
                 <option :value="category.id" x-text="category.name"></option>
               </template>
@@ -273,25 +273,25 @@
           <div class="grid grid-cols-3 gap-2">
             <div>
               <label class="block text-xs mb-1">幅 mm</label>
-              <input type="number" min="1" max="20000" x-model.number="equipmentForm.width_mm" required class="w-full border rounded px-2 py-1 text-sm">
+              <input type="number" min="1" max="20000" x-model.number="form.width_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
             <div>
               <label class="block text-xs mb-1">奥行 mm</label>
-              <input type="number" min="1" max="20000" x-model.number="equipmentForm.depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
+              <input type="number" min="1" max="20000" x-model.number="form.depth_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
             <div>
               <label class="block text-xs mb-1">高さ mm</label>
-              <input type="number" min="1" x-model.number="equipmentForm.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
+              <input type="number" min="1" x-model.number="form.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
           </div>
           <!-- shapeEditor は管理画面と共有。フォームの shape を直接読み書きする。 -->
-          <div x-data="shapeEditor(equipmentForm)" @keydown.window="deleteByKey($event)">
+          <div x-data="shapeEditor(form)" @keydown.window="deleteByKey($event)">
             <div class="flex items-center gap-2 rounded border bg-gray-50 px-3 py-2">
               <div class="min-w-0">
                 <p class="text-xs font-bold">平面形状</p>
-                <p class="text-[10px] text-gray-500" x-text="equipmentForm.shape ? `矩形パーツ形状（外形 ${equipmentForm.width_mm} × ${equipmentForm.depth_mm} mm）` : '通常の矩形'"></p>
+                <p class="text-[10px] text-gray-500" x-text="form.shape ? `矩形パーツ形状（外形 ${form.width_mm} × ${form.depth_mm} mm）` : '通常の矩形'"></p>
               </div>
-              <span x-show="equipmentForm.shape" class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-700">異形</span>
+              <span x-show="form.shape" class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-700">異形</span>
               <button type="button" class="ml-auto rounded border bg-white px-2 py-1 text-xs text-blue-600" @click="openEditor()">形を編集</button>
             </div>
 
@@ -308,7 +308,7 @@
                     <span class="absolute left-1 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] text-gray-500">幅 x（下が0）</span>
                     <span class="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] text-gray-500">奥行 y（左が0）→</span>
                     <svg x-ref="canvas" class="block aspect-[2/1] w-full touch-none bg-slate-50"
-                         :viewBox="viewBox" preserveAspectRatio="xMidYMid meet"
+                         x-effect="$el.setAttribute('viewBox', viewBox)" preserveAspectRatio="xMidYMid meet"
                          @pointerdown="canvasPointerDown($event)" @pointermove="pointerMove($event)"
                          @pointerup="pointerUp($event)" @pointercancel="pointerUp($event)">
                       <defs>
@@ -350,14 +350,14 @@
           </div>
           <div>
             <label class="block text-xs mb-1">重量 kg</label>
-            <input type="number" min="0" step="0.1" x-model.number="equipmentForm.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
+            <input type="number" min="0" step="0.1" x-model.number="form.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
           </div>
 
           <div>
             <div class="flex items-center gap-2 mb-1">
               <label class="text-xs">識別カラー</label>
-              <span class="w-6 h-4 rounded border" :style="`background:${equipmentForm.color}`"></span>
-              <code class="text-[10px] text-gray-500" x-text="equipmentForm.color"></code>
+              <span class="w-6 h-4 rounded border" :style="`background:${form.color}`"></span>
+              <code class="text-[10px] text-gray-500" x-text="form.color"></code>
               <span class="ml-auto text-[10px] text-gray-400">赤はエラー表示に使うため選べません</span>
             </div>
             <div class="grid gap-px border rounded p-1 bg-gray-100"
@@ -365,21 +365,21 @@
               <template x-for="swatch in palette" :key="swatch.id">
                 <button type="button" class="aspect-square rounded-[2px] hover:outline hover:outline-1 hover:outline-gray-900"
                         :style="`background:${swatch.hex}`"
-                        :class="equipmentForm.color === swatch.hex ? 'outline outline-2 outline-gray-900 z-10' : ''"
+                        :class="form.color === swatch.hex ? 'outline outline-2 outline-gray-900 z-10' : ''"
                         :title="`${swatch.group} ${swatch.shade} / ${swatch.hex}`"
-                        @click="equipmentForm.color = swatch.hex"></button>
+                        @click="form.color = swatch.hex"></button>
               </template>
             </div>
           </div>
           <label class="flex items-center gap-2 text-xs" x-show="isAdmin">
-            <input type="checkbox" x-model="equipmentForm.asTemplate" :disabled="!!equipmentForm.id">
+            <input type="checkbox" x-model="form.asTemplate" :disabled="!!form.id">
             共通テンプレートとして登録する（全ユーザーが利用できます）
           </label>
           <div class="flex gap-2 pt-2">
             <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
                     :disabled="saving">保存</button>
             <button type="button" class="px-4 border rounded text-sm" @click="equipmentForm = null">キャンセル</button>
-            <button type="button" x-show="equipmentForm.id" class="px-4 border border-red-300 text-red-600 rounded text-sm"
+            <button type="button" x-show="form.id" class="px-4 border border-red-300 text-red-600 rounded text-sm"
                     @click="removeEquipment()">削除</button>
           </div>
         </div>
