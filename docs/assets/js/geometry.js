@@ -1,4 +1,4 @@
-// 荷台上の矩形配置に関する純粋な計算をまとめる。
+// 荷台上の形状配置に関する純粋な計算をまとめる。
 // SupabaseもDOMも参照しない。将来の2.5D（段積み）対応で手を入れるのもここだけに
 // 収まるよう、状態を持たず入力から出力を返す関数だけで構成している。
 //
@@ -76,11 +76,19 @@ export function normalizeShape(shape, widthMm, depthMm) {
  * 返る座標は荷台の絶対座標。
  */
 export function toParts(placement) {
-  const { widthMm: w0, depthMm: d0, shape } = placement.snapshot;
+  const { widthMm, depthMm, shape } = placement.snapshot;
   const rotation = placement.rotation;
+  const parts = normalizeShape(shape, widthMm, depthMm);
+  // shape がある場合はマスタの width/depth ではなく、形そのものの外形を回転基準にする。
+  // 手入力やCSVで両者がずれても、回転によってパーツが外形の中を飛ばないため。
+  const localBounds = boundsOf(parts);
+  const w0 = localBounds.w;
+  const d0 = localBounds.d;
 
-  return normalizeShape(shape, w0, d0).map((part, partIndex) => {
-    const { x: px, y: py, w: pw, d: pd } = part;
+  return parts.map((part, partIndex) => {
+    const px = part.x - localBounds.x;
+    const py = part.y - localBounds.y;
+    const { w: pw, d: pd } = part;
     let transformed;
 
     switch (rotation) {
@@ -108,6 +116,16 @@ export function toParts(placement) {
   });
 }
 
+/** 配置を、同じidを持つ絶対座標パーツの集合にする。 */
+export function toShape(placement) {
+  return { id: placement.id, parts: toParts(placement) };
+}
+
+/** 障害物などの矩形1枚を形として同じ判定経路に乗せる。 */
+export function rectToShape(rect) {
+  return { id: rect.id, parts: [{ ...rect }] };
+}
+
 /** 軸平行な矩形パーツ群を囲む外形bboxを返す。 */
 export function boundsOf(parts) {
   if (!Array.isArray(parts) || parts.length === 0) return null;
@@ -132,6 +150,13 @@ export function rectsOverlap(a, b, gap = 0) {
   );
 }
 
+/** 2つの形に、指定間隔を割り込むパーツ対が1組でもあるか。 */
+export function shapesOverlap(a, b, gap = 0) {
+  return a.parts.some((partA) =>
+    b.parts.some((partB) => rectsOverlap(partA, partB, gap))
+  );
+}
+
 /** 矩形が荷台の内側に完全に収まっているか。 */
 export function isInsideBed(rect, bed) {
   return (
@@ -143,7 +168,7 @@ export function isInsideBed(rect, bed) {
 }
 
 /**
- * ドラッグ中の矩形について、スナップ後の位置を返す。
+ * ドラッグ中の形について、スナップ後の位置を返す。
  *
  * x軸とy軸を独立に評価する。片方の軸だけが壁に吸い付き、もう片方は自由、
  * という動きのほうが実際の積み込み作業の感覚に近いため。
@@ -153,36 +178,57 @@ export function isInsideBed(rect, bed) {
  *   2. 隣接    … 既存矩形の外側にクリアランスぶん空けて接する位置
  *   3. 整列    … 既存矩形と辺を揃える位置（この候補だけクリアランスを取らない）
  *
- * @param {{x:number,y:number,w:number,d:number}} moving ドラッグ中の矩形（素の位置）
- * @param {Array} others 既に置かれている矩形と障害物
+ * @param {{id:string,parts:Array}} moving ドラッグ中の形（素の位置）
+ * @param {Array} others 既に置かれている形と障害物
  * @param {{w:number,d:number}} bed 荷台内寸
  * @param {number} thresholdMm この距離以内の候補にだけ吸着する
  * @param {number} clearanceMm 吸着先で確保する隙間。しきい値とは別物なので混同しないこと
  *   （しきい値は画面px基準でズームに追従させ、こちらは実寸mm）。
  */
 export function snapPosition(moving, others, bed, thresholdMm, clearanceMm = DEFAULT_CLEARANCE_MM) {
-  const xCandidates = [clearanceMm, bed.w - moving.w - clearanceMm];
-  const yCandidates = [clearanceMm, bed.d - moving.d - clearanceMm];
+  // Phase 1以前にこの純粋関数を直接使っていた呼び出しのため、矩形1枚も受けられる。
+  // アプリ本体は形に統一されており、ここで即座に1パーツの形へ揃える。
+  moving = moving.parts ? moving : rectToShape(moving);
+  others = others.map((other) => other.parts ? other : rectToShape(other));
+  const movingBounds = boundsOf(moving.parts);
+  const origin = { x: movingBounds.x, y: movingBounds.y };
+  const boundsOffset = {
+    dx: movingBounds.x - origin.x,
+    dy: movingBounds.y - origin.y
+  };
+  const xCandidates = [
+    clearanceMm - boundsOffset.dx,
+    bed.w - movingBounds.w - clearanceMm - boundsOffset.dx
+  ];
+  const yCandidates = [
+    clearanceMm - boundsOffset.dy,
+    bed.d - movingBounds.d - clearanceMm - boundsOffset.dy
+  ];
 
   for (const other of others) {
     if (other.id === moving.id) continue;
+    for (const movingPart of moving.parts) {
+      const dx = movingPart.x - origin.x;
+      const dy = movingPart.y - origin.y;
+      for (const otherPart of other.parts) {
+        // 隣接（クリアランスあり）
+        xCandidates.push(otherPart.x - movingPart.w - clearanceMm - dx);
+        xCandidates.push(otherPart.x + otherPart.w + clearanceMm - dx);
+        yCandidates.push(otherPart.y - movingPart.d - clearanceMm - dy);
+        yCandidates.push(otherPart.y + otherPart.d + clearanceMm - dy);
 
-    // 隣接（クリアランスあり）
-    xCandidates.push(other.x - moving.w - clearanceMm);
-    xCandidates.push(other.x + other.w + clearanceMm);
-    yCandidates.push(other.y - moving.d - clearanceMm);
-    yCandidates.push(other.y + other.d + clearanceMm);
-
-    // 整列（クリアランスなし）
-    xCandidates.push(other.x);
-    xCandidates.push(other.x + other.w - moving.w);
-    yCandidates.push(other.y);
-    yCandidates.push(other.y + other.d - moving.d);
+        // 整列（クリアランスなし）
+        xCandidates.push(otherPart.x - dx);
+        xCandidates.push(otherPart.x + otherPart.w - movingPart.w - dx);
+        yCandidates.push(otherPart.y - dy);
+        yCandidates.push(otherPart.y + otherPart.d - movingPart.d - dy);
+      }
+    }
   }
 
   return {
-    x: nearestCandidate(moving.x, xCandidates, thresholdMm),
-    y: nearestCandidate(moving.y, yCandidates, thresholdMm)
+    x: nearestCandidate(origin.x, xCandidates, thresholdMm),
+    y: nearestCandidate(origin.y, yCandidates, thresholdMm)
   };
 }
 
@@ -204,33 +250,38 @@ function nearestCandidate(value, candidates, thresholdMm) {
 /**
  * 重なりを連鎖的に解消する（押し出し / スライド）。
  *
- * pinnedIds に含まれる矩形（＝ユーザーが今動かした/回転させたもの、および障害物）は
- * 動かさず、それ以外を押し出す。押された矩形はさらに次の押し手になる。
+ * pinnedIds に含まれる形（＝ユーザーが今動かした/回転させたもの、および障害物）は
+ * 動かさず、それ以外を押し出す。押された形はさらに次の押し手になる。
  *
- * 一度押し出した矩形は押し出し方向を記憶し、以降その軸方向にしか動かさない。
+ * 一度押し出した形は押し出し方向を記憶し、以降その軸方向にしか動かさない。
  * こうしないとAがBを右に、BがAを左に押し返して振動する。
  *
  * さらに、押された矩形は「自分を押した矩形と同じ軸」に逃げることを優先する。
  * 単純に移動量が最小の向きを選ぶと、一列に並んだ機材を1つ回転させたときに
  * 2つ目以降が横ではなく手前に逃げてしまい、列が崩れて見えるため。
  *
- * @param {Array} rects 全矩形（障害物も pinnedIds に含めて渡す）
- * @param {Array<string>} pinnedIds 動かさない矩形のid
+ * @param {Array} shapes 全形状（障害物も pinnedIds に含めて渡す）
+ * @param {Array<string>} pinnedIds 動かさない形のid
  * @param {{w:number,d:number}} bed 荷台内寸
  * @param {{preferredAxis?: 'x'|'y', clearanceMm?: number}} options
  *   preferredAxis は起点の押し出し方向のヒント
  *   （回転で幅が伸びたなら 'x'、奥行きが伸びたなら 'y' を渡す）。
  *   clearanceMm は押し出したあとに空ける隙間。
- * @returns {{rects: Array, moved: boolean, truncated: boolean}}
- *   rects は座標を更新した新しい配列（入力は破壊しない）。
+ * @returns {{shapes: Array, moved: boolean, truncated: boolean}}
+ *   shapes は座標を更新した新しい配列（入力は破壊しない）。
  *   truncated は反復上限で打ち切ったかどうか。
  */
-export function resolveOverlaps(rects, pinnedIds, bed, options = {}) {
+export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
+  const receivedRects = shapes.some((shape) => !shape.parts);
+  shapes = shapes.map((shape) => shape.parts ? shape : rectToShape(shape));
   const clearanceMm = options.clearanceMm ?? DEFAULT_CLEARANCE_MM;
-  const working = rects.map((rect) => ({ ...rect }));
-  const byId = new Map(working.map((rect) => [rect.id, rect]));
+  const working = shapes.map((shape) => ({
+    ...shape,
+    parts: shape.parts.map((part) => ({ ...part }))
+  }));
+  const byId = new Map(working.map((shape) => [shape.id, shape]));
   const pinned = new Set(pinnedIds);
-  const pinnedRects = working.filter((rect) => pinned.has(rect.id));
+  const pinnedShapes = working.filter((shape) => pinned.has(shape.id));
   const pushDirection = new Map();
 
   const queue = [...pinnedIds];
@@ -262,26 +313,29 @@ export function resolveOverlaps(rects, pinnedIds, bed, options = {}) {
       // 押し出す距離は下の computePush がクリアランスぶん取るので、連鎖の先でも
       // 隙間は確保される。
       const trigger = pinned.has(pusher.id) ? clearanceMm : 0;
-      if (!rectsOverlap(pusher, target, trigger)) continue;
+      if (!shapesOverlap(pusher, target, trigger)) continue;
 
       const displacement = computePush(pusher, target, {
         lockedAxis: pushDirection.get(target.id),
         preferredAxis: pushDirection.get(pusher.id) ?? options.preferredAxis ?? null,
         bed,
-        pinnedRects,
+        pinnedShapes,
+        trigger,
         clearanceMm
       });
       if (!displacement) continue;
 
-      target.x += displacement.dx;
-      target.y += displacement.dy;
+      translateShape(target, displacement.dx, displacement.dy);
       pushDirection.set(target.id, displacement.axis);
       moved = true;
       queue.push(target.id);
     }
   }
 
-  return { rects: working, moved, truncated };
+  const result = { shapes: working, moved, truncated };
+  // 旧APIの返り値は矩形配列だった。1パーツ形の範囲だけ互換値を返す。
+  if (receivedRects) result.rects = working.map((shape) => boundsOf(shape.parts));
+  return result;
 }
 
 /** 押し出し先がエラー状態（荷台外／不動オブジェクトと重なる）になるときの重み。 */
@@ -296,12 +350,42 @@ const PENALTY_AXIS_SWITCH = 1e3;
  *   - 連鎖の向き（preferredAxis）と軸が変わる → 中くらいのペナルティ
  * を加えたもの。既に押し出されている矩形はその軸の候補だけに絞る（振動防止）。
  */
-function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRects, clearanceMm }) {
+function computePush(pusher, target, {
+  lockedAxis, preferredAxis, bed, pinnedShapes, trigger, clearanceMm
+}) {
+  const overlappingPairs = [];
+  for (const pusherPart of pusher.parts) {
+    for (const targetPart of target.parts) {
+      if (rectsOverlap(pusherPart, targetPart, trigger)) {
+        overlappingPairs.push([pusherPart, targetPart]);
+      }
+    }
+  }
+  if (overlappingPairs.length === 0) return null;
+
+  // 1組だけを基準にすると別のパーツが食い込んだまま残る。各方向について、
+  // 重なっている全パーツ対を抜けるのに必要な最大の移動量を採る。
   const candidates = [
-    { axis: 'x', dx: pusher.x - target.w - clearanceMm - target.x, dy: 0 },
-    { axis: 'x', dx: pusher.x + pusher.w + clearanceMm - target.x, dy: 0 },
-    { axis: 'y', dx: 0, dy: pusher.y - target.d - clearanceMm - target.y },
-    { axis: 'y', dx: 0, dy: pusher.y + pusher.d + clearanceMm - target.y }
+    {
+      axis: 'x',
+      dx: Math.min(...overlappingPairs.map(([pp, tp]) => pp.x - tp.w - clearanceMm - tp.x)),
+      dy: 0
+    },
+    {
+      axis: 'x',
+      dx: Math.max(...overlappingPairs.map(([pp, tp]) => pp.x + pp.w + clearanceMm - tp.x)),
+      dy: 0
+    },
+    {
+      axis: 'y',
+      dx: 0,
+      dy: Math.min(...overlappingPairs.map(([pp, tp]) => pp.y - tp.d - clearanceMm - tp.y))
+    },
+    {
+      axis: 'y',
+      dx: 0,
+      dy: Math.max(...overlappingPairs.map(([pp, tp]) => pp.y + pp.d + clearanceMm - tp.y))
+    }
   ];
 
   const usable = lockedAxis
@@ -313,16 +397,11 @@ function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRec
   let bestScore = Infinity;
 
   for (const candidate of usable) {
-    const landed = {
-      x: target.x + candidate.dx,
-      y: target.y + candidate.dy,
-      w: target.w,
-      d: target.d
-    };
+    const landed = movedShape(target, candidate.dx, candidate.dy);
 
     let score = Math.abs(candidate.dx) + Math.abs(candidate.dy);
-    if (!isInsideBed(landed, bed)) score += PENALTY_INVALID;
-    if (pinnedRects.some((rect) => rect.id !== target.id && rectsOverlap(landed, rect))) {
+    if (!isInsideBed(boundsOf(landed.parts), bed)) score += PENALTY_INVALID;
+    if (pinnedShapes.some((shape) => shape.id !== target.id && shapesOverlap(landed, shape))) {
       score += PENALTY_INVALID;
     }
     if (preferredAxis && candidate.axis !== preferredAxis) score += PENALTY_AXIS_SWITCH;
@@ -337,6 +416,20 @@ function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRec
   return { axis: best.axis, dx: Math.round(best.dx), dy: Math.round(best.dy) };
 }
 
+function translateShape(shape, dx, dy) {
+  for (const part of shape.parts) {
+    part.x += dx;
+    part.y += dy;
+  }
+}
+
+function movedShape(shape, dx, dy) {
+  return {
+    ...shape,
+    parts: shape.parts.map((part) => ({ ...part, x: part.x + dx, y: part.y + dy }))
+  };
+}
+
 /**
  * エラー状態（赤色表示の対象）を判定する。
  * 荷台からはみ出しているもの、障害物や他の機材との隙間がクリアランスに
@@ -347,32 +440,42 @@ function computePush(pusher, target, { lockedAxis, preferredAxis, bed, pinnedRec
  *
  * @param {number} clearanceMm 確保すべき隙間。0 を渡すと「実際に重なっているものだけ」を返す
  *   （機材置き場はこれを使う。積み込み前の作業台で、隙間を問う場所ではないため）。
- * @returns {Set<string>} エラーになった矩形のidの集合
+ * @returns {Set<string>} エラーになった形のidの集合
  */
-export function findInvalidRects(rects, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
+export function findInvalidShapes(shapes, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
   const invalid = new Set();
 
-  for (const rect of rects) {
-    if (!fitsInBed(rect, bed, clearanceMm)) {
-      invalid.add(rect.id);
+  for (const shape of shapes) {
+    if (!fitsInBed(boundsOf(shape.parts), bed, clearanceMm)) {
+      invalid.add(shape.id);
     }
     for (const obstacle of obstacles) {
-      if (rectsOverlap(rect, obstacle, clearanceMm)) {
-        invalid.add(rect.id);
+      if (shapesOverlap(shape, obstacle, clearanceMm)) {
+        invalid.add(shape.id);
       }
     }
   }
 
-  for (let i = 0; i < rects.length; i++) {
-    for (let j = i + 1; j < rects.length; j++) {
-      if (rectsOverlap(rects[i], rects[j], clearanceMm)) {
-        invalid.add(rects[i].id);
-        invalid.add(rects[j].id);
+  for (let i = 0; i < shapes.length; i++) {
+    for (let j = i + 1; j < shapes.length; j++) {
+      if (shapesOverlap(shapes[i], shapes[j], clearanceMm)) {
+        invalid.add(shapes[i].id);
+        invalid.add(shapes[j].id);
       }
     }
   }
 
   return invalid;
+}
+
+/** Phase 1以前の矩形API。判定経路は形状版へ一本化する。 */
+export function findInvalidRects(rects, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
+  return findInvalidShapes(
+    rects.map(rectToShape),
+    bed,
+    obstacles.map(rectToShape),
+    clearanceMm
+  );
 }
 
 /**
@@ -393,27 +496,51 @@ function fitsInBed(rect, bed, clearanceMm) {
 }
 
 /**
- * 荷台内で、指定サイズの機材を置ける空き位置を左前から探す。
+ * 荷台内で、指定形状の機材を置ける空き位置を左前から探す。
  * リストからクリックで追加するときや複製するときの初期位置に使う。
  * 見つからなければ null を返す（呼び出し側で「置けなかった」と伝える）。
  *
- * 候補は「壁ぎわ」と「既にある矩形の右／後ろにクリアランスを空けて接する位置」に限る。
+ * 候補は「壁ぎわ」と「既にあるパーツの右／後ろにクリアランスを空けて接する位置」に限る。
  * 固定間隔の格子で走査すると、格子の目からわずかに外れた隙間を丸ごと見落とす。
  * 例えば内寸 2363mm の荷台に幅 1160mm を2つ並べる位置は x = 1180 だが、
  * 50mm 刻みでは 1160 の次が 1210 で上限を超えるため、2つ目が永久に置けなくなる。
  * 辺を基準にすれば必ず詰めて置ける。
  */
-export function findFreeSpot(size, occupied, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
+export function findFreeSpot(parts, occupied, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
+  // 旧APIの size {w,d} も1パーツへ変換し、探索本体は形だけを扱う。
+  if (!Array.isArray(parts)) parts = [{ id: '__candidate__', x: 0, y: 0, ...parts }];
+  occupied = occupied.map((item) => item.parts ? item : rectToShape(item));
+  obstacles = obstacles.map((item) => item.parts ? item : rectToShape(item));
   const blockers = [...occupied, ...obstacles];
-  const xs = edgeCandidates(blockers.map((rect) => rect.x + rect.w), clearanceMm);
-  const ys = edgeCandidates(blockers.map((rect) => rect.y + rect.d), clearanceMm);
+  const localBounds = boundsOf(parts);
+  const localParts = parts.map((part) => ({
+    ...part,
+    x: part.x - localBounds.x,
+    y: part.y - localBounds.y
+  }));
+  const blockerParts = blockers.flatMap((shape) => shape.parts);
+  const xs = edgeCandidates(
+    blockerParts.flatMap((blocker) =>
+      localParts.map((part) => blocker.x + blocker.w - part.x)
+    ),
+    clearanceMm
+  );
+  const ys = edgeCandidates(
+    blockerParts.flatMap((blocker) =>
+      localParts.map((part) => blocker.y + blocker.d - part.y)
+    ),
+    clearanceMm
+  );
 
   for (const y of ys) {
-    if (y + size.d > bed.d) continue;
+    if (y + localBounds.d > bed.d) continue;
     for (const x of xs) {
-      if (x + size.w > bed.w) continue;
-      const candidate = { x, y, w: size.w, d: size.d };
-      const collides = blockers.some((other) => rectsOverlap(candidate, other, clearanceMm));
+      if (x + localBounds.w > bed.w) continue;
+      const candidate = {
+        id: '__candidate__',
+        parts: localParts.map((part) => ({ ...part, x: x + part.x, y: y + part.y }))
+      };
+      const collides = blockers.some((other) => shapesOverlap(candidate, other, clearanceMm));
       if (!collides) return { x, y };
     }
   }

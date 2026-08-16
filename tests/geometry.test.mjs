@@ -8,7 +8,8 @@
 
 import {
   snapPosition, resolveOverlaps, findInvalidRects, rotatedSize, rectsOverlap, findFreeSpot,
-  toRect, toParts, boundsOf, normalizeShape, DEFAULT_CLEARANCE_MM
+  toRect, toParts, rectToShape, boundsOf, normalizeShape, shapesOverlap,
+  findInvalidShapes, DEFAULT_CLEARANCE_MM
 } from '../docs/assets/js/geometry.js';
 
 let pass = 0, fail = 0;
@@ -88,6 +89,23 @@ console.log('# shape');
     { kind: 'rect', x: 20, y: 30, w: 100, d: 200 }
   ] }, 600, 400), [{ x: 20, y: 30, w: 100, d: 200 }]);
 }
+{
+  const shape = { parts: [
+    { kind: 'rect', x: 0, y: 0, w: 100, d: 40 },
+    { kind: 'rect', x: 0, y: 40, w: 40, d: 40 }
+  ] };
+  for (const rotation of [0, 90, 180, 270]) {
+    const parts = toParts({
+      id: 'mismatch', snapshot: { widthMm: 300, depthMm: 200, shape },
+      x: 10, y: 20, rotation
+    });
+    const turned = rotation === 90 || rotation === 270;
+    eq(`マスタ寸法がずれていても${rotation}度回転はshapeの外形を保つ`,
+      boundsOf(parts), {
+        id: 'mismatch', x: 10, y: 20, w: turned ? 80 : 100, d: turned ? 100 : 80
+      });
+  }
+}
 
 console.log('# snapPosition');
 // 吸着先の隙間はクリアランス設定に従う（既定5mm）。しきい値(50)とは別物。
@@ -108,6 +126,19 @@ eq('クリアランスを変えると吸着先も変わる',
 eq('1mmなら隣にぴったり寄せられる',
   snapPosition({ id: 'b', x: 615, y: 12, w: 600, d: 400 }, neighbour, bed, 50, 1),
   { x: 611, y: 10 });
+{
+  const l = {
+    id: 'l',
+    parts: [
+      { id: 'l', x: 0, y: 0, w: 100, d: 40 },
+      { id: 'l', x: 0, y: 40, w: 40, d: 60 }
+    ]
+  };
+  const moving = rectToShape({ id: 'm', x: 42, y: 102, w: 20, d: 20 });
+  eq('L字の袖の辺に吸着', snapPosition(moving, [l], { w: 300, d: 300 }, 10), { x: 45, y: 105 });
+  const besideBody = rectToShape({ id: 'm', x: 103, y: 8, w: 20, d: 20 });
+  eq('L字の本体の辺に吸着', snapPosition(besideBody, [l], { w: 300, d: 300 }, 10), { x: 105, y: 5 });
+}
 
 console.log('# resolveOverlaps');
 {
@@ -161,6 +192,32 @@ console.log('# resolveOverlaps');
   eq('障害物は不動', { x: tire.x, y: tire.y }, { x: 710, y: 100 });
   eq('障害物を避けて押し出される', rectsOverlapForTest(b, tire), false);
 }
+{
+  const l = {
+    id: 'l',
+    parts: [
+      { id: 'l', x: 0, y: 0, w: 100, d: 40 },
+      { id: 'l', x: 0, y: 40, w: 40, d: 60 }
+    ]
+  };
+  const target = rectToShape({ id: 'small', x: 30, y: 50, w: 20, d: 20 });
+  const r = resolveOverlaps([l, target], ['l'], { w: 300, d: 300 });
+  eq('L字に押された機材は凹み側へ逃げる', boundsOf(r.shapes[1].parts),
+    { id: 'small', x: 45, y: 50, w: 20, d: 20 });
+}
+{
+  const pusher = {
+    id: 'multi',
+    parts: [
+      { id: 'multi', x: 0, y: 0, w: 40, d: 40 },
+      { id: 'multi', x: 60, y: 0, w: 60, d: 40 }
+    ]
+  };
+  const target = rectToShape({ id: 'target', x: 30, y: 0, w: 50, d: 40 });
+  const r = resolveOverlaps([pusher, target], ['multi'], { w: 300, d: 300 }, { preferredAxis: 'x' });
+  eq('複数パーツの深い食い込み量で押し出す', boundsOf(r.shapes[1].parts).x, 125);
+  eq('複数パーツの食い込みが残らない', shapesOverlap(r.shapes[0], r.shapes[1], 5), false);
+}
 
 console.log('# findInvalidRects');
 eq('障害物と重なる',
@@ -198,6 +255,21 @@ eq('壁から離れていれば正常', [...findInvalidRects([{ id: 'a', x: 5, y
 // （そうしないと動かしても直せない赤が残る）。
 eq('幅いっぱいの機材は収まっていれば良し',
   [...findInvalidRects([{ id: 'a', x: 0, y: 10, w: bed.w, d: 400 }], bed, [], 5)], []);
+{
+  const l = {
+    id: 'l',
+    parts: [
+      { id: 'l', x: 5, y: 5, w: 100, d: 40 },
+      { id: 'l', x: 5, y: 45, w: 40, d: 60 }
+    ]
+  };
+  const inNotch = rectToShape({ id: 'small', x: 50, y: 50, w: 50, d: 50 });
+  eq('L字の凹みなら外形bboxが重なっても正常',
+    [...findInvalidShapes([l, inNotch], { w: 300, d: 300 }, [], 0)], []);
+  const overlapsOneMm = rectToShape({ id: 'small', x: 44, y: 50, w: 50, d: 50 });
+  eq('L字と1mm重なれば両方が赤い',
+    [...findInvalidShapes([l, overlapsOneMm], { w: 300, d: 300 }, [], 0)], ['l', 'small']);
+}
 
 console.log('# findFreeSpot');
 {
@@ -224,6 +296,18 @@ console.log('# findFreeSpot');
   const tire = { id: 'obstacle:t', x: 0, y: 0, w: 400, d: 1000 };
   eq('障害物を避ける', findFreeSpot({ w: 500, d: 500 }, [], tiny, [tire]), { x: 405, y: 5 });
   eq('避けきれなければ null', findFreeSpot({ w: 800, d: 500 }, [], tiny, [tire]), null);
+}
+{
+  const l = {
+    id: 'l',
+    parts: [
+      { id: 'l', x: 5, y: 5, w: 100, d: 40 },
+      { id: 'l', x: 5, y: 45, w: 40, d: 60 }
+    ]
+  };
+  const small = [{ id: 'small', x: 0, y: 0, w: 50, d: 50 }];
+  eq('findFreeSpotがL字の凹みを空きとして見つける',
+    findFreeSpot(small, [l], { w: 105, d: 105 }), { x: 50, y: 50 });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

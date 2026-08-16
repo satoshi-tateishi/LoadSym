@@ -1,103 +1,114 @@
-# Phase 1 実装プロンプト（多角形シンボル: 幾何エンジン）
+# Phase 2 実装プロンプト（多角形シンボル: 描画）
 
-このファイルは、`IMPLEMENT_PHASE.md` の **Phase 1** を単独で実行するための作業指示書。
+このファイルは、`IMPLEMENT_PHASE.md` の **Phase 2** を単独で実行するための作業指示書。
 
 ---
 
 ## 最初に読むもの
 
 1. `CLAUDE.md`（プロジェクトのルール）
-2. `project-docs/IMPLEMENT_PHASE.md`（全体のフェーズ分割。**設計の芯「二層に分ける」は必ず読むこと**）
-3. `docs/assets/js/geometry.js` 全体（コメントに設計判断の理由が書いてある。消さないこと）
+2. `project-docs/IMPLEMENT_PHASE.md`
+3. `docs/assets/js/renderer.js` 全体（**横向き表示の座標変換**の説明が冒頭にある。ここを理解してから手を入れること）
 
-## Phase 0 で入っているもの（前提）
+## Phase 0 / 1 で入っているもの（前提）
 
-- `equipments.shape jsonb`（`007_equipment_shape.sql` 適用済み。既存データはすべて `null`）
-- `docs/assets/js/geometry.js` に `toParts(placement)` / `boundsOf(parts)` / `normalizeShape(shape, w, d)`
-- `placements.equipment_snapshot` に `shape` が乗る（保存時に形を固定する）
-- 実データに形を持つ機材は**まだ1件も無い**
+- `equipments.shape jsonb`、`placements.equipment_snapshot.shape`（形は保存時に固定される）
+- `geometry.js` … `toParts(placement)` / `toShape(placement)` / `boundsOf(parts)` / `shapesOverlap(a,b,gap)` / `findInvalidShapes` / `rectToShape`
+- 判定・吸着・押し出し・空き探索は**すべて形（パーツ集合）で動いている**
+- **`renderer.js` だけが `toRect()`（外形bbox）のまま。** L字を置いても四角く描かれる
 
 ## このフェーズのゴール
 
-**判定・吸着・押し出し・空き探索をパーツ単位にする。** ここが本体。
+**L字がL字に見えること。かつ、1個の機材として見えること。**
 
-描画は Phase 2、形状エディタは Phase 3。**このフェーズでは `renderer.js` を触らない。**
-実データに形を持つ機材が無いので、画面の見た目は変わらない。検証は `shape` を手で入れた機材で行う。
+形状エディタは Phase 3。このフェーズでは形の入力手段を作らない（確認は下のスニペットで作る機材で行う）。
 
 ## 守るルール
 
 - コメントは**日本語**。既存コメントの「なぜそうしているか」を消さない
-- 動作検証は必須（`npm test` ＋ ローカルサーバでの手動確認）
+- 動作検証は必須（`npm test` ＋ ローカルサーバでの目視確認）
 - コミット・pushはユーザーの指示があるまで行わない
 - `docs/assets/css/styles.css` は生成物（今回はCSS変更なしのはず）
 
 ---
 
-## 共通の表現を決める（最初にやること）
+## 作業1: 機材1個を「2つのpath + text」で描く
 
-判定系の関数は、矩形の配列ではなく**形の配列**を受け取るようにする。
+現在は `<g>` の中に `<rect>` 1枚と `<text>`。これを次の構成にする。
 
-```js
-// 形 = { id, parts }   parts は絶対座標の軸平行矩形 [{ x, y, w, d }, ...]
-export function toShape(placement)   // { id, parts: toParts(placement) の座標部分 }
-export function rectToShape(rect)    // 障害物など1枚の矩形を形にする
+```
+<g class="placement" data-placement-id="..." transform="translate(vx, vy)">
+  <path class="fill"    d="M... 各パーツの矩形をサブパスで並べる ..." fill="色" fill-opacity="0.7"/>
+  <path class="outline" d="M... 外周だけの線分 ..." fill="none" stroke="..." stroke-width="..."/>
+  <text .../>
+</g>
 ```
 
-障害物も「1パーツの形」として同じ経路に乗せる（障害物自体は矩形のまま。Phase 1 で形を持たせるのは機材だけ）。
+**塗りを1枚のpathにまとめる理由**: パーツごとに `<rect fill-opacity="0.7">` を並べると、パーツが重なった部分だけ色が濃くなる。1つのpathにサブパスとして入れれば、塗りは一度しか乗らない。
 
-## 作業1: `toParts` の回転基準を形自身のbboxにする
+**当たり判定が形に沿うようになる副次効果**もある。`onStagePointerDown` は `closest('[data-placement-id]')` で拾っているので、L字の凹みをクリックしたときに**L字ではなく凹みに入っている機材**が選ばれる。これは正しい挙動なので、そのまま活かす。
 
-現在は回転の基準に `snapshot.widthMm / depthMm` を使っている。これが形のbboxとずれていると、回転したときにパーツが枠の中で飛ぶ。
+座標は `toParts(placement)` を使い、各パーツを `toViewRect(bed, part)` でビュー座標へ写す（`toRect` からの置き換え）。
 
-**shape がある場合は、パーツ群のbboxから `w0 / d0` を求めて回転させること。** 形が真であり、`width_mm` / `depth_mm` は一覧表示用の値と位置づける（形状エディタは両者を揃えて保存するが、手入力やCSVでずれる余地がある）。
+## 作業2: 外周線（union outline）を求める
 
-テスト: `width_mm` がbboxより大きい形でも、`toParts` の結果が0/90/180/270 で形の外形を保つこと。
+パーツ境界の内側に線が出ると1個の機材に見えない。**unionの境界だけ**を線分として描く。
 
-## 作業2: `shapesOverlap(a, b, gap)`
+パーツは重ならない前提だが、重なっていても正しく動くアルゴリズムにしておくこと（手入力のデータが来る）。
 
-パーツ総当たりで `rectsOverlap` が1組でも真なら真。`rectsOverlap` は**下位プリミティブとして残す**（既存の意味論そのまま）。
+```
+1. 全パーツから辺を集める
+   垂直辺: x = part.x と x = part.x + part.w、区間 [part.y, part.y + part.d]
+   水平辺: y = part.y と y = part.y + part.d、区間 [part.x, part.x + part.w]
+2. 同じ座標値を持つ辺の区間の端点をすべて集め、区間を分割する
+3. 各サブ区間について、辺の両側（座標 ±0.5mm）の中点がパーツ集合の内部にあるかを判定する
+4. 片側だけが内部のサブ区間＝境界。両側とも内部＝内部線なので描かない
+5. 残った線分を1つのpathにまとめる（隣接する線分の結合は不要）
+```
 
-計算量は 20配置 × 数パーツの総当たりで数千ペア。実用上問題にならないので、素直に二重ループでよい。
+座標は整数mmなので ±0.5mm のサンプリングで判定が壊れることはない。パーツ数は数個なので総当たりでよい。
 
-## 作業3: `findInvalidRects` を形状対応にする
+線の色と太さは現行の矩形と同じ規則にする（選択中: `#1d4ed8` / 18、エラー: `#991b1b` / 8、通常: `#334155` / 8）。
 
-- 機材どうし … `shapesOverlap(a, b, clearanceMm)`
-- 壁 … `fitsInBed(boundsOf(shape.parts), bed, clearanceMm)`
-  - **壁判定をbboxのままにするのは意図的**。「荷台幅いっぱいの機材は両側にクリアランスを取れないので、収まっていれば良しとする」という逃がし方が `clampToBed` と揃えてあり、ここを崩すと直しようのない赤が残る
-- 障害物 … `shapesOverlap`（障害物は1パーツの形）
+## 作業3: ラベル
 
-関数名は `findInvalidShapes` に改名してよい。呼び出し元は `packing.js` の2か所だけ。
+**最大面積のパーツの中心**に置き、そのパーツのボックスで `chooseLabel()` を呼ぶ。縦横どちらに寝かせるかの判定は現行のロジックをそのまま使う。
 
-## 作業4: `snapPosition` の候補をパーツ基準にする
+外形bboxの中心に置くと、L字では文字が機材の外（凹みの空間）に浮くことがある。
 
-x軸とy軸を独立に評価する構造は**現行のまま**。候補の作り方だけ変える。
-移動側パーツの原点オフセットを `mp.dx / mp.dy`（＝パーツのローカル位置）として:
+## 作業4: ドラッグ中の更新を transform に変える
 
-- 隣接（クリアランスあり）: `other.x + other.w + clearance - mp.dx` / `other.x - mp.w - clearance - mp.dx`
-- 整列（クリアランスなし）: `other.x - mp.dx` / `other.x + other.w - mp.w - mp.dx`
+`updatePlacementPosition()` は現在 rect の x/y/width/height を書き換えている。パーツと外周線に増えるので、**`<g>` の `transform="translate(...)"` を書き換える方式**にする。書き換えは1属性で済み、パーツ数が増えても変わらない。
 
-移動側の全パーツ × 相手の全パーツで候補を作る。壁の候補は bbox 基準（`clearance - bounds.dx` など）。
+**座標変換に注意**（`renderer.js` 冒頭の説明のとおり）:
 
-## 作業5: `resolveOverlaps` / `computePush`
+```
+ビューX = 荷台の y
+ビューY = 荷台の w - 荷台の x
+```
 
-- 押し出しの起動判定は `shapesOverlap`
-- 押し出し量は、**重なっているパーツ対それぞれの必要移動量を4方向について求め、方向ごとに最大値**を取る（1組だけ見ると別のパーツがまだ食い込む）
-- そのあとのスコア評価（はみ出し・不動オブジェクトとの重なり・軸切り替えのペナルティ）と `lockedAxis` による振動防止は**現行のまま**
-- `isInsideBed` の判定は bbox で行う
+したがって荷台座標の移動 `(dx, dy)` は、**ビュー座標では `(dy, -dx)`** になる。ここを間違えると、ドラッグ中だけ機材が90度ずれた方向へ動く。
 
-## 作業6: `findFreeSpot` を形で探す
+初期描画時にパーツをどの原点で描くか（絶対座標で描いて transform は差分にするか、ローカル座標で描いて transform を絶対位置にするか）は実装者が決めてよいが、**`renderTruck` の再描画結果とドラッグ中の見た目が一致すること**を必ず確認すること。
 
-引数を `size {w, d}` から**形（parts）**に変える。候補は既存パーツの辺＋壁ぎわ（`edgeCandidates` をパーツ単位に）、判定は `shapesOverlap`。
-「辺を基準に候補を作る」理由（固定間隔の格子だと隙間を見落とす）は現行コメントのとおりなので維持する。
+## 作業5: 移動先ゴースト（`showDropGhost`）
 
-呼び出し元（`createPlacement` / `duplicatePlacement`）は、回転後のパーツを渡すように直す。
+同じくパーツ塗り＋外周線（破線）にする。ゴーストの見た目の規則（塗り 0.35 / 青の破線 / ラベル薄め）は現行を踏襲する。
+`clearDropGhost` / `dimPlacement` はそのまま使える。
 
-## 作業7: `packing.js` の追随
+## 作業6: 障害物
 
-- `placementRects(slot)` → `placementShapes(slot)`、`obstacleRects(slot)` → 形を返す
-- `settle` / `invalidIdsOf` / `summarize` / `rejects` は呼び出しの差し替えのみ。**棄却の考え方（2系統に分ける理由）は変えない**
-- `summarize.floorAreaRatio` … **パーツ面積の合計**にする（凹み分が引かれ、配置率が実態に近づく）。矩形しか無い既存データでは値が変わらないことをテストで担保する
-- `clampToBed` / `clearances` … bbox基準のまま（壁で止める挙動と寸法パネルの表示を維持）
+障害物は矩形のまま（Phase 1 の決定どおり）。`renderObstacles` は変更不要。
+
+## 作業7: あわせて片付ける（Phase 1 の置き土産）
+
+Phase 1 で入った**テストのためだけの互換コード**が残っている。アプリ本体はどこからも使っていないので、この機会に消す。
+
+- `geometry.js` の `snapPosition` 内の `boundsOffset`（`movingBounds.x - origin.x` は常に 0。読む人を迷わせる）
+- 矩形を受け付ける互換経路: `findInvalidRects`、`resolveOverlaps` の `receivedRects` / `result.rects`、`snapPosition` と `findFreeSpot` の矩形受け入れ
+- 上を消すために、`tests/geometry.test.mjs` の矩形ベースのテストを**形（`rectToShape`）ベースへ移す**。テスト内容は変えない
+
+テストだけのための互換層を残すと、次に触る人が「本番でも使われている」と誤解する。
 
 ---
 
@@ -105,48 +116,50 @@ x軸とy軸を独立に評価する構造は**現行のまま**。候補の作�
 
 ### 自動テスト（`npm test` が通ること）
 
-**既存テストが1つも壊れないこと**（矩形は1パーツの特殊ケースとして通るはず）。そのうえで追加する:
+`renderer.js` はDOMに依存するので単体テストは書かない。作業7の移行後、**既存テストが全数通ること**を確認する。
 
-- L字の凹みに別の機材が入る（外形矩形なら弾かれる配置が、辺基準では通る）
-- L字と別機材が1mm重なったら両方が赤くなる
-- L字の袖の辺に吸着する / 本体の辺に吸着する
-- L字を押し出したとき、凹み側へ逃げられる
-- 複数パーツが同時に食い込んでいるとき、**深いほうの必要量だけ**押し出される
-- `findFreeSpot` がL字の凹みを空きとして見つける
-- 配置率がパーツ面積の合計になる（矩形のみの構成では従来と同値）
+外周線の計算だけは純粋関数として切り出せるので、可能なら `geometry.js` 側に置いてテストを書く:
+
+- 単独の矩形 → 4辺すべてが外周
+- L字（2パーツ）→ 共有辺が消え、外周が6本の線分になる
+- 田の字に4パーツを並べた場合 → 内側の十字が消える
 
 ### 手動確認（`npm run serve` + `test-account.json`）
 
-形を持つ機材がまだ無いので、確認用に1件だけ作る。**確認が終わったら消すこと。**
+確認用のL字機材を作る。**終わったら必ず消すこと。**
 
 ```js
-// ブラウザのコンソール（シミュレーター画面）で実行
+// シミュレーター画面のコンソールで実行
 const { createEquipment } = await import('./assets/js/equipments.js');
 const c = Alpine.$data(document.querySelector('main'));
 await createEquipment({
   name: '【テスト】L字卓', category_id: c.defaultCategoryId,
-  width_mm: 1770, depth_mm: 460, height_mm: 800, weight_kg: 40, color: '#63a1e4',
+  width_mm: 1770, depth_mm: 900, height_mm: 800, weight_kg: 40, color: '#63a1e4',
   shape: { parts: [
-    { kind: 'rect', x: 0,    y: 0, w: 1370, d: 460 },
-    { kind: 'rect', x: 1370, y: 0, w: 400,  d: 250 }
+    { kind: 'rect', x: 0, y: 0,   w: 1770, d: 460 },
+    { kind: 'rect', x: 0, y: 460, w: 600,  d: 440 }
   ] }
 }, c.session.user.id);
 ```
 
-1. **既存レイアウトを開いて、配置率・要確認件数が以前と変わらないこと**
-   （`0e44f14e-e28b-429f-bd1b-5e66f90ee57f` は Phase 0 時点で スロット1が 機材5点 / 配置率 11.8% / 総重量 150kg / 要確認 0）
-2. L字を置き、凹みの位置に別の機材をドラッグ → **入ること**（描画は矩形のままなので、判定結果は要確認件数と `toParts` の値で確かめる）
-3. L字を回転（R）しても凹みの向きが正しく追従すること
-4. 密に詰めた状態でL字を押し込み、押し出しが振動せず収束すること
+1. L字が**L字に描かれ、内部に線が出ない**こと
+2. 選択枠の青、エラーの赤（クリアランス設定を広げて赤くする）が外周に沿うこと
+3. **ドラッグ中の追従がずれないこと**（作業4の座標変換。斜めにドラッグして確かめる）
+4. エリアをまたぐドラッグで、移動先のゴーストもL字であること
+5. 90度ずつ4回転させて、1周で元に戻ること
+6. 凹みに別の機材を置き、**凹みの部分をクリックすると中の機材が選ばれる**こと
+7. PNG書き出しと印刷で同じ見た目になること（`export-png.js` はSVGをそのまま描くので、pathでも問題ないはず）
+8. **既存レイアウトを開いて、図が以前とまったく同じであること**
+   （`0e44f14e-e28b-429f-bd1b-5e66f90ee57f` は スロット1が 機材5点 / 配置率 11.8% / 総重量 150kg / 要確認 0）
 
 ## やらないこと
 
-- `renderer.js`（Phase 2）
 - 形状エディタ（Phase 3）
-- 仕様書の更新（Phase 4。ただし**配置率の意味が変わる**ことは報告に含めること）
+- 仕様書の更新（Phase 4）
 
 ## 報告に含めること
 
-- 追加・変更した関数の一覧と、既存テストが全数通ったこと
-- 上記の手動確認1の数値（変化が無いこと）
+- 変更した関数の一覧
+- 上記の手動確認8の数値（変化が無いこと）
 - 作った確認用機材を削除したこと
+- 作業7で消した互換コードの一覧

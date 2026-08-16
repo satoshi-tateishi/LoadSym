@@ -59,6 +59,22 @@ console.log('# summarize');
   eq('高さ超過なし', s.overHeightCount, 0);
 }
 {
+  const lShape = { parts: [
+    { kind: 'rect', x: 0, y: 0, w: 100, d: 40 },
+    { kind: 'rect', x: 0, y: 40, w: 40, d: 60 }
+  ] };
+  const l = snapshot('L字', 100, 100, 500, 10);
+  l.shape = lShape;
+  const shaped = summarize(makeSlot([
+    { id: 'l', snapshot: l, x: 10, y: 10, rotation: 0 }
+  ]));
+  const rectangular = summarize(makeSlot([
+    { id: 'r', snapshot: snapshot('矩形', 100, 100, 500, 10), x: 10, y: 10, rotation: 0 }
+  ]));
+  eq('L字の配置率はパーツ面積の合計', shaped.usedAreaMm2, 100 * 40 + 40 * 60);
+  eq('矩形のみなら従来どおり外形面積', rectangular.usedAreaMm2, 100 * 100);
+}
+{
   const slot = makeSlot([
     { id: 'p1', snapshot: snapshot('重量物', 600, 800, 1200, 1500), x: 10, y: 10, rotation: 0 },
     { id: 'p2', snapshot: snapshot('重量物', 600, 800, 2000, 900), x: 10, y: 900, rotation: 0 }

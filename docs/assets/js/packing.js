@@ -11,7 +11,8 @@
 //   snapshot = { name, widthMm, depthMm, heightMm, weightKg, color, shape }
 
 import {
-  toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, findFreeSpot,
+  toParts, toShape, rectToShape, boundsOf, resolveOverlaps, findInvalidShapes,
+  snapPosition, findFreeSpot,
   DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM
 } from './geometry.js';
 
@@ -65,9 +66,14 @@ export function obstacleRects(slot) {
   }));
 }
 
-/** 機材の配置を当たり判定用の矩形にする。 */
-export function placementRects(slot) {
-  return slot.placements.map(toRect);
+/** 障害物を1パーツの形にし、機材と同じ判定経路に乗せる。 */
+export function obstacleShapes(slot) {
+  return obstacleRects(slot).map(rectToShape);
+}
+
+/** 機材の配置を当たり判定用の形にする。 */
+export function placementShapes(slot) {
+  return slot.placements.map(toShape);
 }
 
 /**
@@ -83,7 +89,7 @@ export function clampToBed(placement, slot, clearanceMm = DEFAULT_CLEARANCE_MM) 
   if (isStaging(slot)) return { x, y };
 
   const bed = bedOf(slot);
-  const rect = toRect(placement);
+  const rect = boundsOf(toParts(placement));
   return {
     x: clampAxis(x, bed.w - rect.w, clearanceMm),
     y: clampAxis(y, bed.d - rect.d, clearanceMm)
@@ -107,9 +113,19 @@ function clampAxis(value, max, clearanceMm) {
  * 機材置き場だけは作業台なので、空きが無くても左前に置く。
  */
 export function createPlacement(equipment, slot, idFactory, clearanceMm = DEFAULT_CLEARANCE_MM) {
-  const size = { w: equipment.width_mm, d: equipment.depth_mm };
+  const draft = {
+    id: '__new__',
+    snapshot: {
+      widthMm: equipment.width_mm,
+      depthMm: equipment.depth_mm,
+      shape: equipment.shape ?? null
+    },
+    x: 0,
+    y: 0,
+    rotation: 0
+  };
   const free = findFreeSpot(
-    size, placementRects(slot), bedOf(slot), obstacleRects(slot), clearanceMm
+    toParts(draft), placementShapes(slot), bedOf(slot), obstacleShapes(slot), clearanceMm
   );
   if (!free && !isStaging(slot)) return null;
   const spot = free ?? { x: 10, y: 10 };
@@ -140,12 +156,11 @@ export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = D
   const source = slot.placements.find((placement) => placement.id === placementId);
   if (!source) return null;
 
-  const rect = toRect(source);
   const free = findFreeSpot(
-    { w: rect.w, d: rect.d },
-    placementRects(slot),
+    toParts({ ...source, x: 0, y: 0 }),
+    placementShapes(slot),
     bedOf(slot),
-    obstacleRects(slot),
+    obstacleShapes(slot),
     clearanceMm
   );
   if (!free && !isStaging(slot)) return null;
@@ -179,14 +194,14 @@ function applyMove(slot, before, placementId, position, thresholdMm, clearanceMm
   const moving = slot.placements.find((placement) => placement.id === placementId);
   if (!moving) return { placements: slot.placements, truncated: false, rejected: false };
 
-  const size = rotatedSize(moving.snapshot.widthMm, moving.snapshot.depthMm, moving.rotation);
+  const proposed = { ...moving, x: position.x, y: position.y };
   const others = [
-    ...placementRects(slot).filter((rect) => rect.id !== placementId),
-    ...obstacleRects(slot)
+    ...placementShapes(slot).filter((shape) => shape.id !== placementId),
+    ...obstacleShapes(slot)
   ];
 
   const snapped = snapPosition(
-    { id: placementId, x: position.x, y: position.y, w: size.w, d: size.d },
+    toShape(proposed),
     others,
     bedOf(slot),
     thresholdMm,
@@ -249,9 +264,9 @@ export function rotatePlacement(slot, placementId, clearanceMm = DEFAULT_CLEARAN
   const target = slot.placements.find((placement) => placement.id === placementId);
   if (!target) return { placements: slot.placements, truncated: false, rejected: false };
 
-  const before = rotatedSize(target.snapshot.widthMm, target.snapshot.depthMm, target.rotation);
+  const before = boundsOf(toParts(target));
   const rotation = (target.rotation + 90) % 360;
-  const after = rotatedSize(target.snapshot.widthMm, target.snapshot.depthMm, rotation);
+  const after = boundsOf(toParts({ ...target, rotation }));
 
   const updated = slot.placements.map((placement) =>
     placement.id === placementId ? { ...placement, rotation } : placement
@@ -267,12 +282,12 @@ export function rotatePlacement(slot, placementId, clearanceMm = DEFAULT_CLEARAN
  * 収束後に判定し、収まらなければ操作前（before）の配置をそのまま返す。
  */
 function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
-  const obstacles = obstacleRects(slot);
-  const rects = [...placementRects(slot), ...obstacles];
-  const pinnedIds = [pinnedPlacementId, ...obstacles.map((rect) => rect.id)];
+  const obstacles = obstacleShapes(slot);
+  const shapes = [...placementShapes(slot), ...obstacles];
+  const pinnedIds = [pinnedPlacementId, ...obstacles.map((shape) => shape.id)];
 
-  const resolved = resolveOverlaps(rects, pinnedIds, bedOf(slot), { preferredAxis, clearanceMm });
-  const byId = new Map(resolved.rects.map((rect) => [rect.id, rect]));
+  const resolved = resolveOverlaps(shapes, pinnedIds, bedOf(slot), { preferredAxis, clearanceMm });
+  const byId = new Map(resolved.shapes.map((shape) => [shape.id, boundsOf(shape.parts)]));
 
   const placements = slot.placements.map((placement) => {
     const rect = byId.get(placement.id);
@@ -327,7 +342,7 @@ function grew(before, after) {
 
 
 function invalidIdsOf(slot, clearanceMm) {
-  return findInvalidRects(placementRects(slot), bedOf(slot), obstacleRects(slot), clearanceMm);
+  return findInvalidShapes(placementShapes(slot), bedOf(slot), obstacleShapes(slot), clearanceMm);
 }
 
 /**
@@ -344,11 +359,14 @@ function invalidGapOf(slot, clearanceMm) {
  */
 export function summarize(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const bed = bedOf(slot);
-  const rects = placementRects(slot);
-  const invalid = findInvalidRects(rects, bed, obstacleRects(slot), invalidGapOf(slot, clearanceMm));
+  const shapes = placementShapes(slot);
+  const invalid = findInvalidShapes(shapes, bed, obstacleShapes(slot), invalidGapOf(slot, clearanceMm));
 
   const bedArea = bed.w * bed.d;
-  const usedArea = rects.reduce((total, rect) => total + rect.w * rect.d, 0);
+  const usedArea = shapes.reduce(
+    (total, shape) => total + shape.parts.reduce((sum, part) => sum + part.w * part.d, 0),
+    0
+  );
   const totalWeightKg = slot.placements.reduce(
     (total, placement) => total + (placement.snapshot.weightKg ?? 0),
     0
@@ -387,7 +405,7 @@ export function clearances(slot, placementId) {
   if (!placement) return null;
 
   const bed = bedOf(slot);
-  const rect = toRect(placement);
+  const rect = boundsOf(toParts(placement));
   return {
     left: rect.x,
     right: bed.w - (rect.x + rect.w),
