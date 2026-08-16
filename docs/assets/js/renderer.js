@@ -19,7 +19,7 @@
 // viewBox は実寸mmで取り、CSSの幅でスケールする。つまり「ズーム」は viewBox の
 // 操作だけで済み、描画側は常にmmで考えればよい。
 
-import { toRect } from './geometry.js';
+import { toParts, unionOutline } from './geometry.js';
 import { bedOf, obstacleRects } from './packing.js';
 
 /**
@@ -175,8 +175,7 @@ function renderObstacles(slot, bed) {
 }
 
 function renderPlacement(placement, bed, invalidIds, selectedId) {
-  const rect = toRect(placement);
-  const box = toViewRect(bed, rect);
+  const drawing = placementDrawing(placement);
   const invalid = invalidIds.has(placement.id);
   const selected = placement.id === selectedId;
 
@@ -186,15 +185,17 @@ function renderPlacement(placement, bed, invalidIds, selectedId) {
 
   // 寸法はシンボルには書かない。枠が小さいと機材名を押しのけて枠からはみ出すうえ、
   // 選択すれば下部の集計パネルに出るため二重に持つ意味がない。
-  const label = chooseLabel(placement.snapshot.name, box);
-  const cx = box.x + box.w / 2;
-  const cy = box.y + box.h / 2;
+  const label = chooseLabel(placement.snapshot.name, drawing.labelBox);
+  const cx = drawing.labelBox.x + drawing.labelBox.w / 2;
+  const cy = drawing.labelBox.y + drawing.labelBox.h / 2;
   const transform = label.vertical ? ` transform="rotate(-90 ${cx} ${cy})"` : '';
 
   return [
-    `<g class="placement" data-placement-id="${escapeXml(placement.id)}" style="cursor:grab">`,
-    `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"`,
-    ` fill="${escapeXml(fill)}" fill-opacity="${invalid ? 0.85 : 0.7}"`,
+    `<g class="placement" data-placement-id="${escapeXml(placement.id)}"`,
+    ` transform="${placementTransform(placement, bed)}" style="cursor:grab">`,
+    `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fill)}"`,
+    ` fill-opacity="${invalid ? 0.85 : 0.7}"/>`,
+    `<path class="outline" d="${drawing.outlinePath}" fill="none"`,
     ` stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
     `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#0f172a" text-anchor="middle" dominant-baseline="middle" pointer-events="none">`,
@@ -202,6 +203,48 @@ function renderPlacement(placement, bed, invalidIds, selectedId) {
     '</text>',
     '</g>'
   ].join('');
+}
+
+/**
+ * 配置の各パーツを、配置原点からのローカルなビュー座標へ写す。
+ * 絶対位置は親gのtranslateに持たせるので、ドラッグ中はtransformだけを更新できる。
+ */
+function placementDrawing(placement) {
+  const parts = toParts(placement);
+  const boxes = parts.map((part) => ({
+    x: part.y - placement.y,
+    y: -(part.x - placement.x + part.w),
+    w: part.d,
+    h: part.w
+  }));
+  const outlineParts = boxes.map((box) => ({
+    x: box.x,
+    y: box.y,
+    w: box.w,
+    d: box.h
+  }));
+  const largestIndex = parts.reduce(
+    (best, part, index) => part.w * part.d > parts[best].w * parts[best].d ? index : best,
+    0
+  );
+
+  return {
+    fillPath: boxes.map(rectSubpath).join(' '),
+    outlinePath: unionOutline(outlineParts).map(lineSubpath).join(' '),
+    labelBox: boxes[largestIndex]
+  };
+}
+
+function rectSubpath(box) {
+  return `M ${box.x} ${box.y} h ${box.w} v ${box.h} h ${-box.w} Z`;
+}
+
+function lineSubpath(line) {
+  return `M ${line.x1} ${line.y1} L ${line.x2} ${line.y2}`;
+}
+
+function placementTransform(placement, bed) {
+  return `translate(${placement.y} ${bed.w - placement.x})`;
 }
 
 /** これより小さい文字は読めないので、代わりに文字列を切り詰める。 */
@@ -293,28 +336,12 @@ function bedOfSvg(svg) {
 export function updatePlacementPosition(svg, placement) {
   const group = svg.querySelector(`[data-placement-id="${CSS.escape(placement.id)}"]`);
   if (!group) return;
-  moveBox(group, toViewRect(bedOfSvg(svg), toRect(placement)));
+  movePlacementGroup(group, placement, bedOfSvg(svg));
 }
 
-/** 枠と機材名を、与えたビュー座標の矩形へ移す。大きさが変わらない移動にだけ使う。 */
-function moveBox(group, box) {
-  const frame = group.querySelector('rect');
-  const label = group.querySelector('text');
-
-  frame.setAttribute('x', box.x);
-  frame.setAttribute('y', box.y);
-  frame.setAttribute('width', box.w);
-  frame.setAttribute('height', box.h);
-
-  // ドラッグ中は大きさが変わらないので、文字サイズと向きはそのままでよい。
-  // 寝かせてある場合だけ、回転の中心も一緒に動かす。
-  const cx = box.x + box.w / 2;
-  const cy = box.y + box.h / 2;
-  label.setAttribute('x', cx);
-  label.setAttribute('y', cy);
-  if (label.hasAttribute('transform')) {
-    label.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
-  }
+/** 荷台座標の移動(dx, dy)をビュー座標(dy, -dx)へ写して親gだけを動かす。 */
+function movePlacementGroup(group, placement, bed) {
+  group.setAttribute('transform', placementTransform(placement, bed));
 }
 
 /**
@@ -328,27 +355,30 @@ function moveBox(group, box) {
  * placement は移動先の荷台座標に直したものを渡すこと。
  */
 export function showDropGhost(svg, placement) {
-  const box = toViewRect(bedOfSvg(svg), toRect(placement));
+  const bed = bedOfSvg(svg);
   const existing = svg.querySelector('g.drop-ghost');
 
   // 同じ機材のゴーストが既にあるなら座標だけ動かす。作り直すと
   // 1回のドラッグで何十回もDOMを組み立てることになる。
   if (existing && existing.dataset.placementId === placement.id) {
-    moveBox(existing, box);
+    movePlacementGroup(existing, placement, bed);
     return;
   }
   existing?.remove();
 
-  const label = chooseLabel(placement.snapshot.name, box);
-  const cx = box.x + box.w / 2;
-  const cy = box.y + box.h / 2;
+  const drawing = placementDrawing(placement);
+  const label = chooseLabel(placement.snapshot.name, drawing.labelBox);
+  const cx = drawing.labelBox.x + drawing.labelBox.w / 2;
+  const cy = drawing.labelBox.y + drawing.labelBox.h / 2;
   const transform = label.vertical ? ` transform="rotate(-90 ${cx} ${cy})"` : '';
 
   svg.insertAdjacentHTML('beforeend', [
-    `<g class="drop-ghost" data-placement-id="${escapeXml(placement.id)}" pointer-events="none">`,
-    `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"`,
-    ` fill="${escapeXml(placement.snapshot.color)}" fill-opacity="0.35"`,
-    ` stroke="#1d4ed8" stroke-width="14" stroke-dasharray="90 60"/>`,
+    `<g class="drop-ghost" data-placement-id="${escapeXml(placement.id)}"`,
+    ` transform="${placementTransform(placement, bed)}" pointer-events="none">`,
+    `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(placement.snapshot.color)}"`,
+    ` fill-opacity="0.35"/>`,
+    `<path class="outline" d="${drawing.outlinePath}" fill="none" stroke="#1d4ed8"`,
+    ` stroke-width="14" stroke-dasharray="90 60"/>`,
     `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#1e293b" fill-opacity="0.7" text-anchor="middle" dominant-baseline="middle">`,
     escapeXml(label.text),

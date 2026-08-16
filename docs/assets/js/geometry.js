@@ -138,6 +138,78 @@ export function boundsOf(parts) {
 }
 
 /**
+ * 軸平行な矩形パーツ群を塗り合わせたときの外周線だけを返す。
+ *
+ * 全境界座標で平面を細分し、各区間の両側を0.5mmずつサンプリングする。
+ * 片側だけがパーツ内部なら、その区間はunionの外周である。全パーツの境界座標で
+ * 分割するため、パーツが重なっていて途中から内部線になる場合も正しく除ける。
+ *
+ * @returns {Array<{x1:number,y1:number,x2:number,y2:number}>}
+ */
+export function unionOutline(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return [];
+
+  const xs = sortedUnique(parts.flatMap((part) => [part.x, part.x + part.w]));
+  const ys = sortedUnique(parts.flatMap((part) => [part.y, part.y + part.d]));
+  const vertical = [];
+  const horizontal = [];
+
+  for (const x of xs) {
+    for (let i = 0; i < ys.length - 1; i++) {
+      const y1 = ys[i];
+      const y2 = ys[i + 1];
+      const midY = (y1 + y2) / 2;
+      const leftInside = pointInsideParts(x - 0.5, midY, parts);
+      const rightInside = pointInsideParts(x + 0.5, midY, parts);
+      if (leftInside !== rightInside) vertical.push({ x1: x, y1, x2: x, y2 });
+    }
+  }
+
+  for (const y of ys) {
+    for (let i = 0; i < xs.length - 1; i++) {
+      const x1 = xs[i];
+      const x2 = xs[i + 1];
+      const midX = (x1 + x2) / 2;
+      const aboveInside = pointInsideParts(midX, y - 0.5, parts);
+      const belowInside = pointInsideParts(midX, y + 0.5, parts);
+      if (aboveInside !== belowInside) horizontal.push({ x1, y1: y, x2, y2: y });
+    }
+  }
+
+  // 分割点をまたいで状態が変わらない外周は1本に戻す。L字の直線部分などを
+  // 不要に細切れにせず、SVGのpathとテスト結果を読みやすく保つため。
+  return [...mergeOutlineSegments(vertical), ...mergeOutlineSegments(horizontal)];
+}
+
+function sortedUnique(values) {
+  return [...new Set(values)].sort((a, b) => a - b);
+}
+
+function pointInsideParts(x, y, parts) {
+  return parts.some((part) =>
+    x > part.x && x < part.x + part.w && y > part.y && y < part.y + part.d
+  );
+}
+
+function mergeOutlineSegments(segments) {
+  const merged = [];
+  for (const segment of segments) {
+    const previous = merged.at(-1);
+    const sameVerticalLine = previous && segment.x1 === segment.x2 &&
+      previous.x1 === previous.x2 && previous.x1 === segment.x1 && previous.y2 === segment.y1;
+    const sameHorizontalLine = previous && segment.y1 === segment.y2 &&
+      previous.y1 === previous.y2 && previous.y1 === segment.y1 && previous.x2 === segment.x1;
+    if (sameVerticalLine || sameHorizontalLine) {
+      previous.x2 = segment.x2;
+      previous.y2 = segment.y2;
+    } else {
+      merged.push({ ...segment });
+    }
+  }
+  return merged;
+}
+
+/**
  * 2つの矩形が重なっているか。gapを渡すと「gap未満しか離れていない」ことを重なりとみなす。
  * 辺どうしがちょうどgapだけ離れている状態は重なりではない（＝スナップの正解位置）。
  */
@@ -186,23 +258,15 @@ export function isInsideBed(rect, bed) {
  *   （しきい値は画面px基準でズームに追従させ、こちらは実寸mm）。
  */
 export function snapPosition(moving, others, bed, thresholdMm, clearanceMm = DEFAULT_CLEARANCE_MM) {
-  // Phase 1以前にこの純粋関数を直接使っていた呼び出しのため、矩形1枚も受けられる。
-  // アプリ本体は形に統一されており、ここで即座に1パーツの形へ揃える。
-  moving = moving.parts ? moving : rectToShape(moving);
-  others = others.map((other) => other.parts ? other : rectToShape(other));
   const movingBounds = boundsOf(moving.parts);
   const origin = { x: movingBounds.x, y: movingBounds.y };
-  const boundsOffset = {
-    dx: movingBounds.x - origin.x,
-    dy: movingBounds.y - origin.y
-  };
   const xCandidates = [
-    clearanceMm - boundsOffset.dx,
-    bed.w - movingBounds.w - clearanceMm - boundsOffset.dx
+    clearanceMm,
+    bed.w - movingBounds.w - clearanceMm
   ];
   const yCandidates = [
-    clearanceMm - boundsOffset.dy,
-    bed.d - movingBounds.d - clearanceMm - boundsOffset.dy
+    clearanceMm,
+    bed.d - movingBounds.d - clearanceMm
   ];
 
   for (const other of others) {
@@ -272,8 +336,6 @@ function nearestCandidate(value, candidates, thresholdMm) {
  *   truncated は反復上限で打ち切ったかどうか。
  */
 export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
-  const receivedRects = shapes.some((shape) => !shape.parts);
-  shapes = shapes.map((shape) => shape.parts ? shape : rectToShape(shape));
   const clearanceMm = options.clearanceMm ?? DEFAULT_CLEARANCE_MM;
   const working = shapes.map((shape) => ({
     ...shape,
@@ -332,10 +394,7 @@ export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
     }
   }
 
-  const result = { shapes: working, moved, truncated };
-  // 旧APIの返り値は矩形配列だった。1パーツ形の範囲だけ互換値を返す。
-  if (receivedRects) result.rects = working.map((shape) => boundsOf(shape.parts));
-  return result;
+  return { shapes: working, moved, truncated };
 }
 
 /** 押し出し先がエラー状態（荷台外／不動オブジェクトと重なる）になるときの重み。 */
@@ -468,16 +527,6 @@ export function findInvalidShapes(shapes, bed, obstacles = [], clearanceMm = DEF
   return invalid;
 }
 
-/** Phase 1以前の矩形API。判定経路は形状版へ一本化する。 */
-export function findInvalidRects(rects, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
-  return findInvalidShapes(
-    rects.map(rectToShape),
-    bed,
-    obstacles.map(rectToShape),
-    clearanceMm
-  );
-}
-
 /**
  * 壁との間にクリアランスを確保できているか。
  *
@@ -507,10 +556,6 @@ function fitsInBed(rect, bed, clearanceMm) {
  * 辺を基準にすれば必ず詰めて置ける。
  */
 export function findFreeSpot(parts, occupied, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
-  // 旧APIの size {w,d} も1パーツへ変換し、探索本体は形だけを扱う。
-  if (!Array.isArray(parts)) parts = [{ id: '__candidate__', x: 0, y: 0, ...parts }];
-  occupied = occupied.map((item) => item.parts ? item : rectToShape(item));
-  obstacles = obstacles.map((item) => item.parts ? item : rectToShape(item));
   const blockers = [...occupied, ...obstacles];
   const localBounds = boundsOf(parts);
   const localParts = parts.map((part) => ({

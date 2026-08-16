@@ -7,9 +7,9 @@
 // ブラウザ向けのESMをNodeからそのまま読むため、依存ゼロ・アサーションも自前。
 
 import {
-  snapPosition, resolveOverlaps, findInvalidRects, rotatedSize, rectsOverlap, findFreeSpot,
+  snapPosition, resolveOverlaps, rotatedSize, rectsOverlap, findFreeSpot,
   toRect, toParts, rectToShape, boundsOf, normalizeShape, shapesOverlap,
-  findInvalidShapes, DEFAULT_CLEARANCE_MM
+  findInvalidShapes, unionOutline, DEFAULT_CLEARANCE_MM
 } from '../docs/assets/js/geometry.js';
 
 let pass = 0, fail = 0;
@@ -20,6 +20,7 @@ const eq = (name, got, want) => {
 };
 
 const rectsOverlapForTest = (a, b) => rectsOverlap(a, b);
+const shapeOf = (rect) => rectToShape(rect);
 const bed = { w: 2000, d: 4000 };
 
 console.log('# rotatedSize');
@@ -107,24 +108,61 @@ console.log('# shape');
   }
 }
 
+console.log('# unionOutline');
+{
+  const outline = unionOutline([{ x: 10, y: 20, w: 100, d: 50 }]);
+  eq('単独矩形は4辺', outline.length, 4);
+}
+{
+  const outline = unionOutline([
+    { x: 0, y: 0, w: 100, d: 40 },
+    { x: 0, y: 40, w: 40, d: 60 }
+  ]);
+  eq('L字は共有辺が消えて外周6本', outline.length, 6);
+  eq('L字の共有辺は含まれない', outline.some((line) =>
+    line.y1 === 40 && line.y2 === 40 && line.x1 === 0 && line.x2 === 40
+  ), false);
+}
+{
+  const outline = unionOutline([
+    { x: 0, y: 0, w: 50, d: 50 },
+    { x: 50, y: 0, w: 50, d: 50 },
+    { x: 0, y: 50, w: 50, d: 50 },
+    { x: 50, y: 50, w: 50, d: 50 }
+  ]);
+  eq('田の字は内側の十字が消える', outline, [
+    { x1: 0, y1: 0, x2: 0, y2: 100 },
+    { x1: 100, y1: 0, x2: 100, y2: 100 },
+    { x1: 0, y1: 0, x2: 100, y2: 0 },
+    { x1: 0, y1: 100, x2: 100, y2: 100 }
+  ]);
+}
+{
+  const outline = unionOutline([
+    { x: 0, y: 0, w: 100, d: 100 },
+    { x: 50, y: 50, w: 100, d: 100 }
+  ]);
+  eq('重なった矩形もunion外周になる', outline.length, 8);
+}
+
 console.log('# snapPosition');
 // 吸着先の隙間はクリアランス設定に従う（既定5mm）。しきい値(50)とは別物。
-eq('左前の壁に吸着', snapPosition({ id: 'a', x: 3, y: 4, w: 600, d: 400 }, [], bed, 50), { x: 5, y: 5 });
+eq('左前の壁に吸着', snapPosition(shapeOf({ id: 'a', x: 3, y: 4, w: 600, d: 400 }), [], bed, 50), { x: 5, y: 5 });
 eq('右奥の壁に吸着',
-  snapPosition({ id: 'a', x: 1385, y: 3585, w: 600, d: 400 }, [], bed, 50),
+  snapPosition(shapeOf({ id: 'a', x: 1385, y: 3585, w: 600, d: 400 }), [], bed, 50),
   { x: 2000 - 600 - 5, y: 4000 - 400 - 5 });
-eq('遠ければ吸着しない', snapPosition({ id: 'a', x: 800, y: 900, w: 600, d: 400 }, [], bed, 50), { x: 800, y: 900 });
+eq('遠ければ吸着しない', snapPosition(shapeOf({ id: 'a', x: 800, y: 900, w: 600, d: 400 }), [], bed, 50), { x: 800, y: 900 });
 // 既存機材 (10,10,600x400) の右隣にクリアランスぶん空けて付く
-const neighbour = [{ id: 'a', x: 10, y: 10, w: 600, d: 400 }];
+const neighbour = [shapeOf({ id: 'a', x: 10, y: 10, w: 600, d: 400 })];
 eq('隣接スナップ',
-  snapPosition({ id: 'b', x: 615, y: 12, w: 600, d: 400 }, neighbour, bed, 50),
+  snapPosition(shapeOf({ id: 'b', x: 615, y: 12, w: 600, d: 400 }), neighbour, bed, 50),
   { x: 615, y: 10 });
 eq('クリアランスを変えると吸着先も変わる',
-  snapPosition({ id: 'b', x: 615, y: 12, w: 600, d: 400 }, neighbour, bed, 50, 10),
+  snapPosition(shapeOf({ id: 'b', x: 615, y: 12, w: 600, d: 400 }), neighbour, bed, 50, 10),
   { x: 620, y: 10 });
 // x は隣に1mm空けて付き、y は整列候補（クリアランスなし）で辺が揃う
 eq('1mmなら隣にぴったり寄せられる',
-  snapPosition({ id: 'b', x: 615, y: 12, w: 600, d: 400 }, neighbour, bed, 50, 1),
+  snapPosition(shapeOf({ id: 'b', x: 615, y: 12, w: 600, d: 400 }), neighbour, bed, 50, 1),
   { x: 611, y: 10 });
 {
   const l = {
@@ -143,25 +181,28 @@ eq('1mmなら隣にぴったり寄せられる',
 console.log('# resolveOverlaps');
 {
   // a を固定して b が重なっている状態 → b が右へ押し出される
-  const rects = [
-    { id: 'a', x: 100, y: 100, w: 600, d: 400 },
-    { id: 'b', x: 400, y: 100, w: 600, d: 400 }
+  const shapes = [
+    shapeOf({ id: 'a', x: 100, y: 100, w: 600, d: 400 }),
+    shapeOf({ id: 'b', x: 400, y: 100, w: 600, d: 400 })
   ];
-  const r = resolveOverlaps(rects, ['a'], bed);
-  eq('bが押し出される', r.rects.find((x) => x.id === 'b'), { id: 'b', x: 705, y: 100, w: 600, d: 400 });
-  eq('aは不動', r.rects.find((x) => x.id === 'a'), { id: 'a', x: 100, y: 100, w: 600, d: 400 });
+  const r = resolveOverlaps(shapes, ['a'], bed);
+  eq('bが押し出される', boundsOf(r.shapes.find((x) => x.id === 'b').parts), { id: 'b', x: 705, y: 100, w: 600, d: 400 });
+  eq('aは不動', boundsOf(r.shapes.find((x) => x.id === 'a').parts), { id: 'a', x: 100, y: 100, w: 600, d: 400 });
   eq('打ち切っていない', r.truncated, false);
-  eq('既定のクリアランス', r.rects[1].x - (rects[0].x + rects[0].w), DEFAULT_CLEARANCE_MM);
+  eq('既定のクリアランス',
+    boundsOf(r.shapes[1].parts).x - (boundsOf(shapes[0].parts).x + boundsOf(shapes[0].parts).w),
+    DEFAULT_CLEARANCE_MM);
 }
 {
   // 連鎖: a固定、b,c が数珠つなぎ
-  const rects = [
-    { id: 'a', x: 100, y: 100, w: 600, d: 400 },
-    { id: 'b', x: 400, y: 100, w: 600, d: 400 },
-    { id: 'c', x: 900, y: 100, w: 600, d: 400 }
+  const shapes = [
+    shapeOf({ id: 'a', x: 100, y: 100, w: 600, d: 400 }),
+    shapeOf({ id: 'b', x: 400, y: 100, w: 600, d: 400 }),
+    shapeOf({ id: 'c', x: 900, y: 100, w: 600, d: 400 })
   ];
-  const r = resolveOverlaps(rects, ['a'], bed);
-  const b = r.rects.find((x) => x.id === 'b'), c = r.rects.find((x) => x.id === 'c');
+  const r = resolveOverlaps(shapes, ['a'], bed);
+  const b = boundsOf(r.shapes.find((x) => x.id === 'b').parts);
+  const c = boundsOf(r.shapes.find((x) => x.id === 'c').parts);
   eq('連鎖でbが移動', b.x, 705);
   eq('連鎖でcも移動', c.x, 1310);
   eq('b-c間クリアランス', c.x - (b.x + b.w), DEFAULT_CLEARANCE_MM);
@@ -171,24 +212,24 @@ console.log('# resolveOverlaps');
   // 逃げ場のない狭い荷台。押し出した結果はみ出す → 赤対象になる
   // 荷台が機材1つ分しかなく、左右にも前後にも逃げ場がない
   const tight = { w: 1000, d: 500 };
-  const rects = [
-    { id: 'a', x: 50, y: 50, w: 900, d: 400 },
-    { id: 'b', x: 100, y: 50, w: 900, d: 400 }
+  const shapes = [
+    shapeOf({ id: 'a', x: 50, y: 50, w: 900, d: 400 }),
+    shapeOf({ id: 'b', x: 100, y: 50, w: 900, d: 400 })
   ];
-  const r = resolveOverlaps(rects, ['a'], tight);
-  const invalid = findInvalidRects(r.rects, tight);
+  const r = resolveOverlaps(shapes, ['a'], tight);
+  const invalid = findInvalidShapes(r.shapes, tight);
   eq('逃げ場がなければはみ出す', [...invalid], ['b']);
 }
 {
   // 障害物(pinned)の上には押し出さない
-  const rects = [
-    { id: 'a', x: 100, y: 100, w: 600, d: 400 },
-    { id: 'b', x: 400, y: 100, w: 600, d: 400 },
-    { id: 'tire', x: 710, y: 100, w: 300, d: 400 }
+  const shapes = [
+    shapeOf({ id: 'a', x: 100, y: 100, w: 600, d: 400 }),
+    shapeOf({ id: 'b', x: 400, y: 100, w: 600, d: 400 }),
+    shapeOf({ id: 'tire', x: 710, y: 100, w: 300, d: 400 })
   ];
-  const r = resolveOverlaps(rects, ['a', 'tire'], bed, { preferredAxis: 'x' });
-  const b = r.rects.find((x) => x.id === 'b');
-  const tire = r.rects.find((x) => x.id === 'tire');
+  const r = resolveOverlaps(shapes, ['a', 'tire'], bed, { preferredAxis: 'x' });
+  const b = boundsOf(r.shapes.find((x) => x.id === 'b').parts);
+  const tire = boundsOf(r.shapes.find((x) => x.id === 'tire').parts);
   eq('障害物は不動', { x: tire.x, y: tire.y }, { x: 710, y: 100 });
   eq('障害物を避けて押し出される', rectsOverlapForTest(b, tire), false);
 }
@@ -219,42 +260,45 @@ console.log('# resolveOverlaps');
   eq('複数パーツの食い込みが残らない', shapesOverlap(r.shapes[0], r.shapes[1], 5), false);
 }
 
-console.log('# findInvalidRects');
+console.log('# findInvalidShapes');
 eq('障害物と重なる',
-  [...findInvalidRects([{ id: 'a', x: 0, y: 0, w: 500, d: 500 }], bed, [{ id: 'o', x: 400, y: 400, w: 200, d: 200 }])],
+  [...findInvalidShapes([shapeOf({ id: 'a', x: 0, y: 0, w: 500, d: 500 })], bed,
+    [shapeOf({ id: 'o', x: 400, y: 400, w: 200, d: 200 })])],
   ['a']);
 eq('離れていれば正常',
-  [...findInvalidRects([
-    { id: 'a', x: 10, y: 10, w: 600, d: 400 },
-    { id: 'b', x: 620, y: 10, w: 600, d: 400 }
+  [...findInvalidShapes([
+    shapeOf({ id: 'a', x: 10, y: 10, w: 600, d: 400 }),
+    shapeOf({ id: 'b', x: 620, y: 10, w: 600, d: 400 })
   ], bed)],
   []);
 // 重なり0（辺どうしがぴったり接する）は不可。手も吊りベルトも入らないため。
 eq('接していたらエラー',
-  [...findInvalidRects([
-    { id: 'a', x: 10, y: 10, w: 600, d: 400 },
-    { id: 'b', x: 610, y: 10, w: 600, d: 400 }
+  [...findInvalidShapes([
+    shapeOf({ id: 'a', x: 10, y: 10, w: 600, d: 400 }),
+    shapeOf({ id: 'b', x: 610, y: 10, w: 600, d: 400 })
   ], bed)],
   ['a', 'b']);
 
 // 判定の基準は設定値そのもの。設定を広げると、確保できていない機材が赤くなる。
 const packed = [
-  { id: 'a', x: 10, y: 10, w: 600, d: 400 },
-  { id: 'b', x: 615, y: 10, w: 600, d: 400 }
+  shapeOf({ id: 'a', x: 10, y: 10, w: 600, d: 400 }),
+  shapeOf({ id: 'b', x: 615, y: 10, w: 600, d: 400 })
 ];
-eq('5mm設定なら5mm間隔は正常', [...findInvalidRects(packed, bed, [], 5)], []);
-eq('10mm設定にすると足りない2点が赤くなる', [...findInvalidRects(packed, bed, [], 10)], ['a', 'b']);
-eq('1mm設定なら余裕で正常', [...findInvalidRects(packed, bed, [], 1)], []);
+eq('5mm設定なら5mm間隔は正常', [...findInvalidShapes(packed, bed, [], 5)], []);
+eq('10mm設定にすると足りない2点が赤くなる', [...findInvalidShapes(packed, bed, [], 10)], ['a', 'b']);
+eq('1mm設定なら余裕で正常', [...findInvalidShapes(packed, bed, [], 1)], []);
 // 機材置き場は 0 を渡す。実際に重なっているものだけを見る。
-eq('0を渡すと重なりだけを見る', [...findInvalidRects(packed, bed, [], 0)], []);
+eq('0を渡すと重なりだけを見る', [...findInvalidShapes(packed, bed, [], 0)], []);
 
 // 壁との間にも設定値ぶんの隙間を要求する
-eq('壁ぴったりは足りない', [...findInvalidRects([{ id: 'a', x: 0, y: 10, w: 600, d: 400 }], bed, [], 5)], ['a']);
-eq('壁から離れていれば正常', [...findInvalidRects([{ id: 'a', x: 5, y: 10, w: 600, d: 400 }], bed, [], 5)], []);
+eq('壁ぴったりは足りない',
+  [...findInvalidShapes([shapeOf({ id: 'a', x: 0, y: 10, w: 600, d: 400 })], bed, [], 5)], ['a']);
+eq('壁から離れていれば正常',
+  [...findInvalidShapes([shapeOf({ id: 'a', x: 5, y: 10, w: 600, d: 400 })], bed, [], 5)], []);
 // 荷台の幅いっぱいの機材は、両側にクリアランスを取れない。収まっていれば良しとする
 // （そうしないと動かしても直せない赤が残る）。
 eq('幅いっぱいの機材は収まっていれば良し',
-  [...findInvalidRects([{ id: 'a', x: 0, y: 10, w: bed.w, d: 400 }], bed, [], 5)], []);
+  [...findInvalidShapes([shapeOf({ id: 'a', x: 0, y: 10, w: bed.w, d: 400 })], bed, [], 5)], []);
 {
   const l = {
     id: 'l',
@@ -276,26 +320,32 @@ console.log('# findFreeSpot');
   // 11tロングの内寸に幅1160を2つ並べる。2つ目は x=1180 にしか置けない。
   // 50mm刻みの格子で探すと 1160 の次が 1210 で上限を超え、半分しか積めなかった。
   const wide = { w: 2363, d: 9090 };
-  const first = findFreeSpot({ w: 1160, d: 405 }, [], wide);
+  const parts = [{ id: '__candidate__', x: 0, y: 0, w: 1160, d: 405 }];
+  const first = findFreeSpot(parts, [], wide);
   eq('1つ目は左前の隅', first, { x: DEFAULT_CLEARANCE_MM, y: DEFAULT_CLEARANCE_MM });
 
-  const placed = [{ id: 'a', x: first.x, y: first.y, w: 1160, d: 405 }];
-  eq('2つ目は隣に詰めて置ける', findFreeSpot({ w: 1160, d: 405 }, placed, wide), { x: 1170, y: 5 });
+  const placed = [shapeOf({ id: 'a', x: first.x, y: first.y, w: 1160, d: 405 })];
+  eq('2つ目は隣に詰めて置ける', findFreeSpot(parts, placed, wide), { x: 1170, y: 5 });
   // クリアランスを広げると、その分だけ離して置く
-  eq('10mmなら10mm空けて置く', findFreeSpot({ w: 1160, d: 405 }, placed, wide, [], 10), { x: 1175, y: 10 });
+  eq('10mmなら10mm空けて置く', findFreeSpot(parts, placed, wide, [], 10), { x: 1175, y: 10 });
 }
 {
   // 横に入らなければ次の列へ送る
   const narrow = { w: 1700, d: 4400 };
-  const placed = [{ id: 'a', x: 10, y: 10, w: 1160, d: 405 }];
-  eq('入らなければ後ろの列へ', findFreeSpot({ w: 1160, d: 405 }, placed, narrow), { x: 5, y: 420 });
+  const parts = [{ id: '__candidate__', x: 0, y: 0, w: 1160, d: 405 }];
+  const placed = [shapeOf({ id: 'a', x: 10, y: 10, w: 1160, d: 405 })];
+  eq('入らなければ後ろの列へ', findFreeSpot(parts, placed, narrow), { x: 5, y: 420 });
 }
 {
   // 障害物も避ける。避けた先が荷台からはみ出すなら null。
   const tiny = { w: 1000, d: 1000 };
-  const tire = { id: 'obstacle:t', x: 0, y: 0, w: 400, d: 1000 };
-  eq('障害物を避ける', findFreeSpot({ w: 500, d: 500 }, [], tiny, [tire]), { x: 405, y: 5 });
-  eq('避けきれなければ null', findFreeSpot({ w: 800, d: 500 }, [], tiny, [tire]), null);
+  const tire = shapeOf({ id: 'obstacle:t', x: 0, y: 0, w: 400, d: 1000 });
+  eq('障害物を避ける',
+    findFreeSpot([{ id: '__candidate__', x: 0, y: 0, w: 500, d: 500 }], [], tiny, [tire]),
+    { x: 405, y: 5 });
+  eq('避けきれなければ null',
+    findFreeSpot([{ id: '__candidate__', x: 0, y: 0, w: 800, d: 500 }], [], tiny, [tire]),
+    null);
 }
 {
   const l = {
