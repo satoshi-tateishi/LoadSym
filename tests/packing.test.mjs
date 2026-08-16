@@ -153,6 +153,19 @@ console.log('# createPlacement');
     summarize({ ...slot, placements: [...slot.placements, created] }).invalidCount, 0);
   eq('回転は0で作られる', created.rotation, 0);
   eq('スナップショットを持つ', created.snapshot.name, 'B');
+  eq('形が無い機材はnullをスナップショットに持つ', created.snapshot.shape, null);
+}
+{
+  const shape = { parts: [{ kind: 'rect', x: 0, y: 0, w: 200, d: 600 }] };
+  const created = createPlacement(
+    {
+      id: 'e2', name: 'L字', width_mm: 400, depth_mm: 600, height_mm: 500,
+      weight_kg: 10, color: '#64748b', shape
+    },
+    makeSlot([]),
+    () => 'with-shape'
+  );
+  eq('機材の形をスナップショットに固定する', created.snapshot.shape, shape);
 }
 
 console.log('# 機材置き場');

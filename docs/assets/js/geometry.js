@@ -46,6 +46,80 @@ export function toRect(placement) {
 }
 
 /**
+ * shape を有効な軸平行矩形の配列に正規化する。
+ * 未知の kind は将来形式として無視し、有効な矩形が残らない場合や shape 自体が
+ * 壊れている場合は、外形サイズと同じ矩形1枚へフォールバックする。
+ */
+export function normalizeShape(shape, widthMm, depthMm) {
+  const fallback = [{ x: 0, y: 0, w: widthMm, d: depthMm }];
+  if (!Array.isArray(shape?.parts) || shape.parts.length === 0) return fallback;
+
+  const rects = shape.parts.filter((part) => part?.kind === 'rect');
+  const hasInvalidRect = rects.some((part) =>
+    !Number.isFinite(part.x) ||
+    !Number.isFinite(part.y) ||
+    !Number.isFinite(part.w) ||
+    !Number.isFinite(part.d) ||
+    part.w <= 0 ||
+    part.d <= 0
+  );
+  if (hasInvalidRect) return fallback;
+
+  const parts = rects.map((part) => ({ x: part.x, y: part.y, w: part.w, d: part.d }));
+
+  return parts.length > 0 ? parts : fallback;
+}
+
+/**
+ * 配置を当たり判定用のパーツ（軸平行な矩形）の配列にする。
+ * shape を持たない機材は1枚の矩形として扱うので、呼び出し側は形の有無を意識しなくてよい。
+ * 返る座標は荷台の絶対座標。
+ */
+export function toParts(placement) {
+  const { widthMm: w0, depthMm: d0, shape } = placement.snapshot;
+  const rotation = placement.rotation;
+
+  return normalizeShape(shape, w0, d0).map((part, partIndex) => {
+    const { x: px, y: py, w: pw, d: pd } = part;
+    let transformed;
+
+    switch (rotation) {
+      case 90:
+        transformed = { x: d0 - py - pd, y: px, w: pd, d: pw };
+        break;
+      case 180:
+        transformed = { x: w0 - px - pw, y: d0 - py - pd, w: pw, d: pd };
+        break;
+      case 270:
+        transformed = { x: py, y: w0 - px - pw, w: pd, d: pw };
+        break;
+      default:
+        transformed = { x: px, y: py, w: pw, d: pd };
+    }
+
+    return {
+      id: placement.id,
+      partIndex,
+      x: placement.x + transformed.x,
+      y: placement.y + transformed.y,
+      w: transformed.w,
+      d: transformed.d
+    };
+  });
+}
+
+/** 軸平行な矩形パーツ群を囲む外形bboxを返す。 */
+export function boundsOf(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return null;
+
+  const minX = Math.min(...parts.map((part) => part.x));
+  const minY = Math.min(...parts.map((part) => part.y));
+  const maxX = Math.max(...parts.map((part) => part.x + part.w));
+  const maxY = Math.max(...parts.map((part) => part.y + part.d));
+  return { id: parts[0].id, x: minX, y: minY, w: maxX - minX, d: maxY - minY };
+}
+
+/**
  * 2つの矩形が重なっているか。gapを渡すと「gap未満しか離れていない」ことを重なりとみなす。
  * 辺どうしがちょうどgapだけ離れている状態は重なりではない（＝スナップの正解位置）。
  */

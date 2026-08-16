@@ -8,7 +8,7 @@
 
 import {
   snapPosition, resolveOverlaps, findInvalidRects, rotatedSize, rectsOverlap, findFreeSpot,
-  DEFAULT_CLEARANCE_MM
+  toRect, toParts, boundsOf, normalizeShape, DEFAULT_CLEARANCE_MM
 } from '../docs/assets/js/geometry.js';
 
 let pass = 0, fail = 0;
@@ -24,6 +24,70 @@ const bed = { w: 2000, d: 4000 };
 console.log('# rotatedSize');
 eq('0度', rotatedSize(600, 400, 0), { w: 600, d: 400 });
 eq('90度', rotatedSize(600, 400, 90), { w: 400, d: 600 });
+
+console.log('# shape');
+{
+  const placement = {
+    id: 'shape-less',
+    snapshot: { widthMm: 600, depthMm: 400 },
+    x: 30,
+    y: 40,
+    rotation: 0
+  };
+  const [part] = toParts(placement);
+  const rect = toRect(placement);
+  eq('shapeが無ければ外形矩形1枚', part,
+    { id: rect.id, partIndex: 0, x: rect.x, y: rect.y, w: rect.w, d: rect.d });
+}
+{
+  const shape = { parts: [
+    { kind: 'rect', x: 0, y: 0, w: 1370, d: 460 },
+    { kind: 'rect', x: 1370, y: 0, w: 400, d: 250 }
+  ] };
+  const expected = {
+    0: [
+      { id: 'l', partIndex: 0, x: 100, y: 200, w: 1370, d: 460 },
+      { id: 'l', partIndex: 1, x: 1470, y: 200, w: 400, d: 250 }
+    ],
+    90: [
+      { id: 'l', partIndex: 0, x: 100, y: 200, w: 460, d: 1370 },
+      { id: 'l', partIndex: 1, x: 310, y: 1570, w: 250, d: 400 }
+    ],
+    180: [
+      { id: 'l', partIndex: 0, x: 500, y: 200, w: 1370, d: 460 },
+      { id: 'l', partIndex: 1, x: 100, y: 410, w: 400, d: 250 }
+    ],
+    270: [
+      { id: 'l', partIndex: 0, x: 100, y: 600, w: 460, d: 1370 },
+      { id: 'l', partIndex: 1, x: 100, y: 200, w: 250, d: 400 }
+    ]
+  };
+
+  for (const rotation of [0, 90, 180, 270]) {
+    const placement = {
+      id: 'l', snapshot: { widthMm: 1770, depthMm: 460, shape }, x: 100, y: 200, rotation
+    };
+    const parts = toParts(placement);
+    eq(`L字の${rotation}度回転`, parts, expected[rotation]);
+    eq(`L字の${rotation}度回転後の外形`, boundsOf(parts), toRect(placement));
+  }
+}
+{
+  const fallback = [{ x: 0, y: 0, w: 600, d: 400 }];
+  eq('空配列は外形矩形へフォールバック', normalizeShape({ parts: [] }, 600, 400), fallback);
+  eq('負の幅は外形矩形へフォールバック',
+    normalizeShape({ parts: [{ kind: 'rect', x: 0, y: 0, w: -1, d: 10 }] }, 600, 400), fallback);
+  eq('壊れた矩形が1つでもあれば形全体をフォールバック', normalizeShape({ parts: [
+    { kind: 'rect', x: 0, y: 0, w: 100, d: 100 },
+    { kind: 'rect', x: 100, y: 0, w: 0, d: 100 }
+  ] }, 600, 400), fallback);
+  eq('未知のkindだけなら外形矩形へフォールバック',
+    normalizeShape({ parts: [{ kind: 'circle', cx: 10, cy: 10, r: 10 }] }, 600, 400), fallback);
+  eq('未知のkindは無視して有効な矩形を残す', normalizeShape({ parts: [
+    { kind: 'circle', cx: 10, cy: 10, r: 10 },
+    { kind: 'rect', x: 20, y: 30, w: 100, d: 200 }
+  ] }, 600, 400), [{ x: 20, y: 30, w: 100, d: 200 }]);
+}
 
 console.log('# snapPosition');
 // 吸着先の隙間はクリアランス設定に従う（既定5mm）。しきい値(50)とは別物。

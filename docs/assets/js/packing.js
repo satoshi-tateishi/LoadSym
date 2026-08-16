@@ -8,7 +8,7 @@
 //     obstacles: [{ id, label, x, y, w, d, heightMm }],
 //     placements: [{ id, equipmentId, snapshot, x, y, rotation }]
 //   }
-//   snapshot = { name, widthMm, depthMm, heightMm, weightKg, color }
+//   snapshot = { name, widthMm, depthMm, heightMm, weightKg, color, shape }
 
 import {
   toRect, rotatedSize, resolveOverlaps, findInvalidRects, snapPosition, findFreeSpot,
@@ -123,7 +123,8 @@ export function createPlacement(equipment, slot, idFactory, clearanceMm = DEFAUL
       depthMm: equipment.depth_mm,
       heightMm: equipment.height_mm,
       weightKg: Number(equipment.weight_kg ?? 0),
-      color: equipment.color
+      color: equipment.color,
+      shape: equipment.shape ?? null
     },
     x: spot.x,
     y: spot.y,

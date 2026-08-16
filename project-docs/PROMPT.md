@@ -1,151 +1,152 @@
-# Phase 0 実装プロンプト（多角形シンボル: データモデル）
+# Phase 1 実装プロンプト（多角形シンボル: 幾何エンジン）
 
-このファイルは、`IMPLEMENT_PHASE.md` の **Phase 0** を単独で実行するための作業指示書。
-新しいセッションでそのまま渡せるように、必要な情報を自己完結でまとめてある。
+このファイルは、`IMPLEMENT_PHASE.md` の **Phase 1** を単独で実行するための作業指示書。
 
 ---
 
 ## 最初に読むもの
 
 1. `CLAUDE.md`（プロジェクトのルール）
-2. `project-docs/IMPLEMENT_PHASE.md`（全体のフェーズ分割。前提と設計の芯）
-3. `project-docs/SPECIFICATION.md` の 5.1 / 6.2 / 6.3（機材データと配置計算）
+2. `project-docs/IMPLEMENT_PHASE.md`（全体のフェーズ分割。**設計の芯「二層に分ける」は必ず読むこと**）
+3. `docs/assets/js/geometry.js` 全体（コメントに設計判断の理由が書いてある。消さないこと）
+
+## Phase 0 で入っているもの（前提）
+
+- `equipments.shape jsonb`（`007_equipment_shape.sql` 適用済み。既存データはすべて `null`）
+- `docs/assets/js/geometry.js` に `toParts(placement)` / `boundsOf(parts)` / `normalizeShape(shape, w, d)`
+- `placements.equipment_snapshot` に `shape` が乗る（保存時に形を固定する）
+- 実データに形を持つ機材は**まだ1件も無い**
 
 ## このフェーズのゴール
 
-機材に**形（矩形パーツの集合）**を保存できるようにし、その形を配置のスナップショットまで運ぶ。
+**判定・吸着・押し出し・空き探索をパーツ単位にする。** ここが本体。
 
-**判定と描画は一切変えない。** このフェーズが終わった時点で、画面の見た目・当たり判定・集計は**すべて今までどおり**であること。形を使い始めるのは Phase 1 以降。
+描画は Phase 2、形状エディタは Phase 3。**このフェーズでは `renderer.js` を触らない。**
+実データに形を持つ機材が無いので、画面の見た目は変わらない。検証は `shape` を手で入れた機材で行う。
 
 ## 守るルール
 
-- ユーザーとのやり取り、コード内のコメントは**日本語**
-- DBマイグレーションは `project-docs/sql/NNN_snake_case.sql` の連番ファイル。**Supabase CLI は使わない**（ユーザーがダッシュボードのSQL Editorに貼って実行する）。ファイル先頭に「なぜこの変更をするか」を日本語で書く
-- `docs/assets/css/styles.css` は生成物。直接編集しない（今回はCSS変更なしのはず）
-- コードを直したら**必ず動作検証する**（ローカルサーバ or 公開ページ）
+- コメントは**日本語**。既存コメントの「なぜそうしているか」を消さない
+- 動作検証は必須（`npm test` ＋ ローカルサーバでの手動確認）
 - コミット・pushはユーザーの指示があるまで行わない
+- `docs/assets/css/styles.css` は生成物（今回はCSS変更なしのはず）
 
 ---
 
-## 作業1: マイグレーション `project-docs/sql/007_equipment_shape.sql`（新規）
+## 共通の表現を決める（最初にやること）
 
-```sql
-alter table public.equipments add column shape jsonb;
-```
-
-`null` = 従来どおりの1枚矩形。先頭コメントに以下を日本語で書くこと。
-
-- L字（袖付き卓）やコの字（ラック）を外形矩形で判定すると、凹みに入るはずの機材が入らない
-- 形は「軸平行な矩形パーツの集合」として持つ。辺が軸平行なら既存の吸着・押し出し・空き探索がそのまま使える
-- `width_mm` / `depth_mm` は**外形bboxとして残す**（一覧表示・CSV・並び替え・空き探索の初期サイズが動き続ける）
-- `parts[].kind` を最初から持たせるので、将来の多角形・円はマイグレーション不要
-
-形式（外形bboxの左前を原点とするローカル座標、単位mm、整数）:
-
-```json
-{ "parts": [
-  { "kind": "rect", "x": 0,    "y": 0, "w": 1370, "d": 460 },
-  { "kind": "rect", "x": 1370, "y": 0, "w": 400,  "d": 250 }
-]}
-```
-
-制約はDBに書かず、アプリ側（`normalizeShape`）で吸収する。壊れた形が入っていても図が出せなくなるより、矩形にフォールバックするほうがよい。
-
-**適用はユーザーが行う。** ファイルを作ったら、貼って実行するよう伝えること。
-
-## 作業2: `docs/assets/js/equipments.js`
-
-`COLUMNS` に `shape` を足すだけ。
+判定系の関数は、矩形の配列ではなく**形の配列**を受け取るようにする。
 
 ```js
-const COLUMNS =
-  'id, user_id, name, category_id, width_mm, depth_mm, height_mm, weight_kg, color, note, sort_order,' +
-  ' shape, equipment_categories (id, name, sort_order)';
+// 形 = { id, parts }   parts は絶対座標の軸平行矩形 [{ x, y, w, d }, ...]
+export function toShape(placement)   // { id, parts: toParts(placement) の座標部分 }
+export function rectToShape(rect)    // 障害物など1枚の矩形を形にする
 ```
 
-## 作業3: `docs/assets/js/geometry.js`
+障害物も「1パーツの形」として同じ経路に乗せる（障害物自体は矩形のまま。Phase 1 で形を持たせるのは機材だけ）。
 
-`toParts()` を追加する。**既存の `toRect()` は残す**（描画と寸法パネルがまだ使っている）。
+## 作業1: `toParts` の回転基準を形自身のbboxにする
 
-```js
-/**
- * 配置を当たり判定用のパーツ（軸平行な矩形）の配列にする。
- * shape を持たない機材は1枚の矩形として扱うので、呼び出し側は形の有無を意識しなくてよい。
- * 返る座標は荷台の絶対座標。
- */
-export function toParts(placement) { ... }
-```
+現在は回転の基準に `snapshot.widthMm / depthMm` を使っている。これが形のbboxとずれていると、回転したときにパーツが枠の中で飛ぶ。
 
-中身の要点:
+**shape がある場合は、パーツ群のbboxから `w0 / d0` を求めて回転させること。** 形が真であり、`width_mm` / `depth_mm` は一覧表示用の値と位置づける（形状エディタは両者を揃えて保存するが、手入力やCSVでずれる余地がある）。
 
-- `placement.snapshot.shape` が無ければ `[{ x: 0, y: 0, w: widthMm, d: depthMm }]`
-- 回転は90度刻み。外形が `w0 × d0`（**回転前**）のとき、ローカル座標のパーツ `(px, py, pw, pd)` は次のように写す:
+テスト: `width_mm` がbboxより大きい形でも、`toParts` の結果が0/90/180/270 で形の外形を保つこと。
 
-  | rotation | 変換後 |
-  |---|---|
-  | 0 | `(px, py, pw, pd)` |
-  | 90 | `(d0 - py - pd, px, pd, pw)` |
-  | 180 | `(w0 - px - pw, d0 - py - pd, pw, pd)` |
-  | 270 | `(py, w0 - px - pw, pd, pw)` |
+## 作業2: `shapesOverlap(a, b, gap)`
 
-- 最後に `placement.x` / `placement.y` を足す
-- 各パーツに `id`（＝placementのid）と `partIndex` を持たせる。Phase 1 で押し出し対象を特定するのに使う
-- 併せて `boundsOf(parts)`（外形bbox）も追加する。`toRect(placement)` と一致することを必ずテストで確かめる
+パーツ総当たりで `rectsOverlap` が1組でも真なら真。`rectsOverlap` は**下位プリミティブとして残す**（既存の意味論そのまま）。
 
-`normalizeShape(shape, widthMm, depthMm)` を用意して、次を弾いて矩形にフォールバックする。
+計算量は 20配置 × 数パーツの総当たりで数千ペア。実用上問題にならないので、素直に二重ループでよい。
 
-- `parts` が配列でない / 空
-- `w` または `d` が 0以下、数値でない
-- `kind` が `'rect'` 以外（**将来の多角形・円が入ってきても落ちないように**、未知のkindは無視する）
+## 作業3: `findInvalidRects` を形状対応にする
 
-## 作業4: `docs/assets/js/packing.js`
+- 機材どうし … `shapesOverlap(a, b, clearanceMm)`
+- 壁 … `fitsInBed(boundsOf(shape.parts), bed, clearanceMm)`
+  - **壁判定をbboxのままにするのは意図的**。「荷台幅いっぱいの機材は両側にクリアランスを取れないので、収まっていれば良しとする」という逃がし方が `clampToBed` と揃えてあり、ここを崩すと直しようのない赤が残る
+- 障害物 … `shapesOverlap`（障害物は1パーツの形）
 
-`createPlacement()` が作る `snapshot` に `shape` を含める。
+関数名は `findInvalidShapes` に改名してよい。呼び出し元は `packing.js` の2か所だけ。
 
-```js
-snapshot: {
-  name: equipment.name,
-  widthMm: equipment.width_mm,
-  depthMm: equipment.depth_mm,
-  heightMm: equipment.height_mm,
-  weightKg: Number(equipment.weight_kg ?? 0),
-  color: equipment.color,
-  shape: equipment.shape ?? null
-}
-```
+## 作業4: `snapPosition` の候補をパーツ基準にする
 
-保存時の図を固定するのがスナップショットの目的なので、**形もここで固める**（マスタの形を後から変えても、保存済みのレイアウトは変わらない）。`duplicatePlacement()` はスナップショットをそのままコピーしているので変更不要。
+x軸とy軸を独立に評価する構造は**現行のまま**。候補の作り方だけ変える。
+移動側パーツの原点オフセットを `mp.dx / mp.dy`（＝パーツのローカル位置）として:
 
-## 触らないもの（重要）
+- 隣接（クリアランスあり）: `other.x + other.w + clearance - mp.dx` / `other.x - mp.w - clearance - mp.dx`
+- 整列（クリアランスなし）: `other.x - mp.dx` / `other.x + other.w - mp.w - mp.dx`
 
-- **機材フォーム（`simulator.html` / `admin.html` と各 `saveEquipment()`）は変更しない。**
-  PostgRESTのPATCHは渡した列だけ更新するので、`values` に `shape` が無くても既存の形は消えない。形の編集UIは Phase 3。
-- `docs/assets/js/layouts.js` … `equipment_snapshot` はjsonbを丸ごと出し入れしているので変更不要
-- `renderer.js` / 判定系（`findInvalidRects` など）… Phase 1・2で扱う
+移動側の全パーツ × 相手の全パーツで候補を作る。壁の候補は bbox 基準（`clearance - bounds.dx` など）。
+
+## 作業5: `resolveOverlaps` / `computePush`
+
+- 押し出しの起動判定は `shapesOverlap`
+- 押し出し量は、**重なっているパーツ対それぞれの必要移動量を4方向について求め、方向ごとに最大値**を取る（1組だけ見ると別のパーツがまだ食い込む）
+- そのあとのスコア評価（はみ出し・不動オブジェクトとの重なり・軸切り替えのペナルティ）と `lockedAxis` による振動防止は**現行のまま**
+- `isInsideBed` の判定は bbox で行う
+
+## 作業6: `findFreeSpot` を形で探す
+
+引数を `size {w, d}` から**形（parts）**に変える。候補は既存パーツの辺＋壁ぎわ（`edgeCandidates` をパーツ単位に）、判定は `shapesOverlap`。
+「辺を基準に候補を作る」理由（固定間隔の格子だと隙間を見落とす）は現行コメントのとおりなので維持する。
+
+呼び出し元（`createPlacement` / `duplicatePlacement`）は、回転後のパーツを渡すように直す。
+
+## 作業7: `packing.js` の追随
+
+- `placementRects(slot)` → `placementShapes(slot)`、`obstacleRects(slot)` → 形を返す
+- `settle` / `invalidIdsOf` / `summarize` / `rejects` は呼び出しの差し替えのみ。**棄却の考え方（2系統に分ける理由）は変えない**
+- `summarize.floorAreaRatio` … **パーツ面積の合計**にする（凹み分が引かれ、配置率が実態に近づく）。矩形しか無い既存データでは値が変わらないことをテストで担保する
+- `clampToBed` / `clearances` … bbox基準のまま（壁で止める挙動と寸法パネルの表示を維持）
 
 ---
 
 ## 完了条件
 
-### 自動テスト（`tests/geometry.test.mjs` に追加、`npm test` が通ること）
+### 自動テスト（`npm test` が通ること）
 
-- shape が無い配置の `toParts()` が、`toRect()` と同じ矩形1枚を返す
-- L字（上の例の2パーツ）の `toParts()` が、回転 0 / 90 / 180 / 270 で上の変換表どおりの座標を返す
-- 回転後の `boundsOf(toParts(p))` が `toRect(p)` と一致する（外形の整合）
-- `normalizeShape` が壊れた形（空配列 / 負の幅 / 未知のkind）で矩形にフォールバックする
-- **既存のテストが1つも壊れないこと**
+**既存テストが1つも壊れないこと**（矩形は1パーツの特殊ケースとして通るはず）。そのうえで追加する:
 
-### 手動確認（`npm run serve` + `test-account.json` のアカウント）
+- L字の凹みに別の機材が入る（外形矩形なら弾かれる配置が、辺基準では通る）
+- L字と別機材が1mm重なったら両方が赤くなる
+- L字の袖の辺に吸着する / 本体の辺に吸着する
+- L字を押し出したとき、凹み側へ逃げられる
+- 複数パーツが同時に食い込んでいるとき、**深いほうの必要量だけ**押し出される
+- `findFreeSpot` がL字の凹みを空きとして見つける
+- 配置率がパーツ面積の合計になる（矩形のみの構成では従来と同値）
 
-1. `007_equipment_shape.sql` の適用をユーザーに依頼する
-2. **既存レイアウトを開いて、図・配置率・要確認件数が以前とまったく同じであること**（ここが本フェーズの肝）
-3. 機材の追加・編集・複製・保存・開き直しが今までどおり動くこと
-4. ダッシュボードから1件だけ手で L字の `shape` を入れ、その機材を配置して保存 → 開き直したとき、`placement.snapshot.shape` に形が入っていること（画面はまだ矩形で描かれる。これで正しい）
+### 手動確認（`npm run serve` + `test-account.json`）
 
-## 成果物
+形を持つ機材がまだ無いので、確認用に1件だけ作る。**確認が終わったら消すこと。**
 
-- `project-docs/sql/007_equipment_shape.sql`（新規・ユーザーが適用）
-- `docs/assets/js/equipments.js` / `geometry.js` / `packing.js`
-- `tests/geometry.test.mjs`
+```js
+// ブラウザのコンソール（シミュレーター画面）で実行
+const { createEquipment } = await import('./assets/js/equipments.js');
+const c = Alpine.$data(document.querySelector('main'));
+await createEquipment({
+  name: '【テスト】L字卓', category_id: c.defaultCategoryId,
+  width_mm: 1770, depth_mm: 460, height_mm: 800, weight_kg: 40, color: '#63a1e4',
+  shape: { parts: [
+    { kind: 'rect', x: 0,    y: 0, w: 1370, d: 460 },
+    { kind: 'rect', x: 1370, y: 0, w: 400,  d: 250 }
+  ] }
+}, c.session.user.id);
+```
 
-見た目の変更が無いフェーズなので、**「何も変わっていないこと」を確認した結果を具体的な数値で報告する**こと（開いたレイアウト名、配置率、要確認件数の変化なし、など）。
+1. **既存レイアウトを開いて、配置率・要確認件数が以前と変わらないこと**
+   （`0e44f14e-e28b-429f-bd1b-5e66f90ee57f` は Phase 0 時点で スロット1が 機材5点 / 配置率 11.8% / 総重量 150kg / 要確認 0）
+2. L字を置き、凹みの位置に別の機材をドラッグ → **入ること**（描画は矩形のままなので、判定結果は要確認件数と `toParts` の値で確かめる）
+3. L字を回転（R）しても凹みの向きが正しく追従すること
+4. 密に詰めた状態でL字を押し込み、押し出しが振動せず収束すること
+
+## やらないこと
+
+- `renderer.js`（Phase 2）
+- 形状エディタ（Phase 3）
+- 仕様書の更新（Phase 4。ただし**配置率の意味が変わる**ことは報告に含めること）
+
+## 報告に含めること
+
+- 追加・変更した関数の一覧と、既存テストが全数通ったこと
+- 上記の手動確認1の数値（変化が無いこと）
+- 作った確認用機材を削除したこと
