@@ -40,6 +40,18 @@ async function renderSvgToPngBlob(svg) {
   clone.setAttribute('width', width);
   clone.setAttribute('height', height);
 
+  // 画面用SVGには Alpine の :style / @pointerdown などが残っている。
+  // HTML上では有効でもXMLの属性名としては不正で、ImageがSVGを読み込めなくなるため、
+  // ラスタライズに不要なディレクティブを複製側から除く。
+  for (const element of [clone, ...clone.querySelectorAll('*')]) {
+    for (const attribute of [...element.attributes]) {
+      if (attribute.name.startsWith(':') || attribute.name.startsWith('@') ||
+          attribute.name.startsWith('x-')) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  }
+
   // 背景を白で塗る。透過のままだと現場でそのまま印刷したとき文字が読めない。
   const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   background.setAttribute('x', viewBox.x);

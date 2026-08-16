@@ -35,6 +35,7 @@ export function rotatedSize(widthMm, depthMm, rotation) {
 /**
  * 配置(placement)から当たり判定用の矩形を作る。
  * placement: { id, x, y, rotation, snapshot: { widthMm, depthMm } }
+ * 本番コードでは使わず、テストでマスタ寸法から求めた従来の外形bboxとの比較基準にだけ使う。
  */
 export function toRect(placement) {
   const { w, d } = rotatedSize(
