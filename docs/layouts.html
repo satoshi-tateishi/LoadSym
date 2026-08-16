@@ -28,7 +28,16 @@
 
   <!-- 自分のレイアウト -->
   <section class="mb-6" x-show="!loading">
-    <h2 class="text-sm font-bold mb-2">自分のレイアウト</h2>
+    <div class="flex items-baseline gap-2 mb-2">
+      <h2 class="text-sm font-bold">自分のレイアウト</h2>
+      <!-- 保存できる件数の上限（DBトリガで担保）。絞り込み後の件数ではなく
+           常に全件を出す。上限に対する残りを見る数字なので、検索で減っては困る。 -->
+      <span class="ml-auto text-xs tabular-nums"
+            :class="mine.length >= layoutLimit ? 'text-red-600 font-bold'
+                    : mine.length >= layoutLimit * 0.9 ? 'text-amber-700' : 'text-gray-500'"
+            :title="`保存できるレイアウトは1ユーザーあたり${layoutLimit}件までです`"
+            x-text="`${mine.length} / ${layoutLimit}`"></span>
+    </div>
     <p x-show="myLayouts.length === 0" class="text-sm text-gray-500 bg-white border rounded p-6 text-center">
       保存したレイアウトはまだありません。<a href="./simulator.html" class="text-blue-600 hover:underline">シミュレーター</a>で作成して保存してください。
     </p>

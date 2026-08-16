@@ -10,8 +10,16 @@ import { translateError } from '../error-messages.js';
 import { listLayouts, listOwnerNames, deleteLayout, renameLayout, loadLayout, saveLayout, toSlots }
   from '../layouts.js';
 
+/**
+ * 1ユーザーが保存できるレイアウトの上限。担保は DB トリガ（006_layout_limit.sql）で、
+ * ここは残り枠を見せるためだけの値。変えるときは必ず両方を揃えること。
+ */
+const LAYOUT_LIMIT = 300;
+
 export function layoutList() {
   return {
+    layoutLimit: LAYOUT_LIMIT,
+
     loading: true,
     saving: false,
     errorMessage: '',
@@ -61,7 +69,12 @@ export function layoutList() {
     },
 
     get myLayouts() {
-      return this.filtered(this.layouts.filter((layout) => layout.user_id === this.session?.user?.id));
+      return this.filtered(this.mine);
+    },
+
+    /** 絞り込み前の自分のレイアウト。上限に対する残り枠を数えるのに使う。 */
+    get mine() {
+      return this.layouts.filter((layout) => layout.user_id === this.session?.user?.id);
     },
 
     get otherLayouts() {
