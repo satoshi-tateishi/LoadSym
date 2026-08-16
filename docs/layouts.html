@@ -32,15 +32,18 @@
     <p x-show="myLayouts.length === 0" class="text-sm text-gray-500 bg-white border rounded p-6 text-center">
       保存したレイアウトはまだありません。<a href="./simulator.html" class="text-blue-600 hover:underline">シミュレーター</a>で作成して保存してください。
     </p>
-    <table x-show="myLayouts.length" class="w-full bg-white border rounded text-xs">
+    <!-- 2つの表は上下に並ぶので、列の構成と幅を揃える（table-fixed ＋ 同じ幅指定）。
+         中身に合わせて自動で幅が決まると、同じ意味の列が表ごとに違う位置に来て、
+         見比べるたびに視線が横へ泳ぐ。名前だけは残り幅いっぱいを使わせる。 -->
+    <table x-show="myLayouts.length" class="w-full table-fixed bg-white border rounded text-xs">
       <thead class="bg-gray-50 text-gray-500">
         <tr>
           <th class="text-left px-3 py-2">名前</th>
-          <th class="text-left px-3 py-2">トラック</th>
-          <th class="text-right px-3 py-2">積込済</th>
-          <th class="text-right px-3 py-2">積込待ち</th>
-          <th class="text-left px-3 py-2">更新日時</th>
-          <th class="px-3 py-2"></th>
+          <!-- 自分の表では常に自分の名前になるが、列を揃えるために出す。 -->
+          <th class="text-left px-3 py-2 w-32">作成者</th>
+          <th class="text-left px-3 py-2 w-40">トラック</th>
+          <th class="text-left px-3 py-2 w-36">更新日時</th>
+          <th class="px-3 py-2 w-32"></th>
         </tr>
       </thead>
       <tbody>
@@ -51,15 +54,11 @@
                       x-text="layout.name"></button>
               <span class="block text-[10px] text-gray-400" x-text="layout.note"></span>
             </td>
+            <td class="px-3 py-2 text-gray-600" x-text="ownerName(layout)"></td>
             <td class="px-3 py-2 text-gray-600" x-text="layout.truckNames"></td>
-            <td class="px-3 py-2 text-right tabular-nums" x-text="layout.loadedCount + ' 点'"></td>
-            <td class="px-3 py-2 text-right tabular-nums"
-                :class="layout.stagingCount ? 'text-amber-700 font-bold' : 'text-gray-400'"
-                x-text="layout.stagingCount + ' 点'"></td>
             <td class="px-3 py-2 text-gray-500 tabular-nums" x-text="formatDate(layout.updated_at)"></td>
             <td class="px-3 py-2 text-right whitespace-nowrap">
-              <button type="button" class="text-blue-600 hover:underline" @click="open(layout)">開く</button>
-              <button type="button" class="ml-2 text-blue-600 hover:underline disabled:opacity-30"
+              <button type="button" class="text-blue-600 hover:underline disabled:opacity-30"
                       :disabled="!canEditLayouts || saving" @click="openRenameForm(layout)">名前変更</button>
               <button type="button" class="ml-2 text-red-600 hover:underline disabled:opacity-30"
                       :disabled="!canEditLayouts || saving" @click="remove(layout)">削除</button>
@@ -73,16 +72,15 @@
   <!-- 他のユーザーのレイアウト -->
   <section x-show="!loading && otherLayouts.length">
     <h2 class="text-sm font-bold mb-2">他のユーザーのレイアウト<span class="font-normal text-gray-500">（閲覧のみ）</span></h2>
-    <table class="w-full bg-white border rounded text-xs">
+    <!-- 幅の指定は「自分のレイアウト」の表と必ず同じにすること（上のコメント参照）。 -->
+    <table class="w-full table-fixed bg-white border rounded text-xs">
       <thead class="bg-gray-50 text-gray-500">
         <tr>
           <th class="text-left px-3 py-2">名前</th>
-          <th class="text-left px-3 py-2">作成者</th>
-          <th class="text-left px-3 py-2">トラック</th>
-          <th class="text-right px-3 py-2">積込済</th>
-          <th class="text-right px-3 py-2">積込待ち</th>
-          <th class="text-left px-3 py-2">更新日時</th>
-          <th class="px-3 py-2"></th>
+          <th class="text-left px-3 py-2 w-32">作成者</th>
+          <th class="text-left px-3 py-2 w-40">トラック</th>
+          <th class="text-left px-3 py-2 w-36">更新日時</th>
+          <th class="px-3 py-2 w-32"></th>
         </tr>
       </thead>
       <tbody>
@@ -95,14 +93,9 @@
             </td>
             <td class="px-3 py-2 text-gray-600" x-text="ownerName(layout)"></td>
             <td class="px-3 py-2 text-gray-600" x-text="layout.truckNames"></td>
-            <td class="px-3 py-2 text-right tabular-nums" x-text="layout.loadedCount + ' 点'"></td>
-            <td class="px-3 py-2 text-right tabular-nums"
-                :class="layout.stagingCount ? 'text-amber-700' : 'text-gray-400'"
-                x-text="layout.stagingCount + ' 点'"></td>
             <td class="px-3 py-2 text-gray-500 tabular-nums" x-text="formatDate(layout.updated_at)"></td>
             <td class="px-3 py-2 text-right whitespace-nowrap">
-              <button type="button" class="text-blue-600 hover:underline" @click="open(layout)">開く</button>
-              <button type="button" class="ml-2 text-blue-600 hover:underline disabled:opacity-30"
+              <button type="button" class="text-blue-600 hover:underline disabled:opacity-30"
                       :disabled="!canEditLayouts || saving" @click="duplicate(layout)">複製して編集</button>
             </td>
           </tr>

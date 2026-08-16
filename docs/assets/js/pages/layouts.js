@@ -147,19 +147,13 @@ export function layoutList() {
   };
 }
 
-/** 一覧の表示に使う値（トラック名・機材点数）をあらかじめ計算しておく。 */
+/** 一覧の表示と絞り込みに使うトラック名をあらかじめ組み立てておく。 */
 function decorate(layout) {
-  const areas = layout.layout_trucks ?? [];
-  const trucks = areas.filter((area) => area.truck_snapshot?.kind !== 'staging');
-  const staging = areas.find((area) => area.truck_snapshot?.kind === 'staging');
-
-  const countOf = (area) => area.placements?.[0]?.count ?? 0;
+  const trucks = (layout.layout_trucks ?? [])
+    .filter((area) => area.truck_snapshot?.kind !== 'staging');
 
   return {
     ...layout,
-    truckNames: trucks.map((area) => area.truck_snapshot?.name ?? '（不明）').join('、') || '—',
-    truckCount: trucks.length,
-    loadedCount: trucks.reduce((total, area) => total + countOf(area), 0),
-    stagingCount: staging ? countOf(staging) : 0
+    truckNames: trucks.map((area) => area.truck_snapshot?.name ?? '（不明）').join('、') || '—'
   };
 }

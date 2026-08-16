@@ -59,6 +59,27 @@
       先に下の<span class="font-bold">機材置き場</span>へ必要な機材を並べておくこともできます。
     </p>
 
+    <!-- 選択中の機材の寸法。操作の対象と手札を、目線を動かさずに確かめられるよう
+         トラックのすぐ上に置く。
+         未選択でも枠は残して案内文を出す。選択のたびに出入りさせると、その都度
+         下のトラックが上下にずれて、掴もうとした機材がポインタの下から逃げる。 -->
+    <div class="mb-2 bg-white rounded border p-2 text-[11px] print-hidden">
+      <template x-if="selectedInfo">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span class="font-bold" x-text="selectedInfo.name"></span>
+          <span class="tabular-nums" x-text="`外形 ${selectedInfo.width}×${selectedInfo.depth} mm`"></span>
+          <span class="tabular-nums" x-text="`左 ${selectedInfo.left} / 右 ${selectedInfo.right} mm`"></span>
+          <span class="tabular-nums" x-text="`前 ${selectedInfo.front} / 後 ${selectedInfo.back} mm`"></span>
+          <!-- 操作の説明は内容が変わらないので右端に固定する。左詰めのままだと、
+               機材名や寸法の桁数で位置が動き、目が毎回それを追うことになる。 -->
+          <span class="ml-auto text-gray-500">R:回転 / Delete:削除 / Ctrl+D:複製 / 矢印:移動</span>
+        </div>
+      </template>
+      <p x-show="!selectedInfo" class="text-gray-400">
+        機材をクリックすると、寸法と周囲の隙間をここに表示します。
+      </p>
+    </div>
+
     <!-- トラックブロック。通知をこの下端に重ねるため relative にする。
          space-y-3 の中に絶対配置の子を混ぜると兄弟マージンの対象になるので、外側で囲む。 -->
     <div class="relative">
@@ -138,19 +159,6 @@
              @pointerdown="onStagePointerDown($event, stagingSlot)"></svg>
       </div>
     </template>
-
-    <!-- 選択中の機材の寸法 -->
-    <div x-show="selectedInfo" class="mt-2 bg-white rounded border p-2 text-[11px] print-hidden">
-      <template x-if="selectedInfo">
-        <div class="flex flex-wrap gap-x-4 gap-y-1">
-          <span class="font-bold" x-text="selectedInfo.name"></span>
-          <span x-text="`外形 ${selectedInfo.width}×${selectedInfo.depth} mm`"></span>
-          <span x-text="`左 ${selectedInfo.left} / 右 ${selectedInfo.right} mm`"></span>
-          <span x-text="`前 ${selectedInfo.front} / 後 ${selectedInfo.back} mm`"></span>
-          <span class="text-gray-500">R:回転 / Delete:削除 / Ctrl+D:複製 / 矢印:移動</span>
-        </div>
-      </template>
-    </div>
   </section>
 
   <!-- ============ 右: データ・操作タブ ============ -->
