@@ -7,7 +7,7 @@ const NORMAL_GRID_MM = 100;
 const FINE_GRID_MM = 10;
 const MIN_SIZE_MM = 1;
 const MAX_SIZE_MM = 20000;
-const MIN_CANVAS_MM = 1000;
+const MIN_CANVAS_MM = 2500;
 const CANVAS_MARGIN_MM = 300;
 
 function cloneParts(form) {
@@ -137,6 +137,21 @@ export function shapeEditor(form) {
       return `${this.bounds.w} × ${this.bounds.d} mm`;
     },
 
+    /**
+     * SVG内のtemplate要素はHTMLTemplateElementにならずAlpineのx-forで扱えないため、
+     * renderer.jsと同様にSVGマークアップを文字列で組み立てる。
+     */
+    get partsMarkup() {
+      return this.parts.map((part, index) => {
+        const box = viewRect(part, this.widthExtent);
+        const selected = this.selectedIndex === index;
+        return `<rect data-part-index="${index}" x="${box.x}" y="${box.y}"` +
+          ` width="${box.w}" height="${box.h}"` +
+          ` fill="${selected ? '#93c5fd' : '#cbd5e1'}" fill-opacity="0.8"` +
+          ` stroke="${selected ? '#1d4ed8' : '#475569'}" stroke-width="8"/>`;
+      }).join('');
+    },
+
     openEditor() {
       this.parts = cloneParts(this.form);
       this.refreshExtents();
@@ -175,6 +190,11 @@ export function shapeEditor(form) {
 
     canvasPointerDown(event) {
       if (event.button !== 0) return;
+      const hit = event.target.closest?.('[data-part-index]');
+      if (hit) {
+        this.partPointerDown(event, Number(hit.dataset.partIndex));
+        return;
+      }
       if (this.tool !== 'rect') {
         this.selectedIndex = null;
         return;
@@ -187,7 +207,6 @@ export function shapeEditor(form) {
     },
 
     partPointerDown(event, index) {
-      event.stopPropagation();
       if (event.button !== 0) return;
       this.selectedIndex = index;
       if (this.tool !== 'select') return;
