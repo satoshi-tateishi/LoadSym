@@ -484,7 +484,8 @@ export function admin() {
         this.backupList = entries.map((entry) => ({
           ...entry,
           displayPath: entry.path_display ?? entry.name,
-          displayModified: formatJst(entry.client_modified)
+          displayModified: formatJst(entry.client_modified),
+          displaySize: formatMegabytes(entry.size)
         }));
       });
     },
@@ -534,6 +535,10 @@ export function admin() {
       });
     }
   };
+}
+
+function formatMegabytes(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function nextSortOrder(categories) {
