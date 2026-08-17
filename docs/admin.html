@@ -364,6 +364,8 @@
     <template x-if="restorePreview">
       <div class="bg-white rounded p-4 w-full max-w-md text-xs space-y-3">
         <p class="font-bold text-red-600">本当にこのバックアップで復元しますか？</p>
+        <p x-show="errorMessage" x-text="errorMessage"
+           class="text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2"></p>
         <p>
           作成日時: <span x-text="restorePreview.createdAtJst"></span><br>
           現在のデータはすべて削除され、以下の件数で置き換わります。この操作は元に戻せません。
@@ -379,7 +381,7 @@
         </label>
         <div class="flex gap-2 pt-1">
           <button type="button" class="flex-1 bg-red-600 text-white rounded py-2 disabled:opacity-50"
-                  :disabled="saving || restoreConfirmText !== '復元'" @click="confirmRestore()">復元する</button>
+                  :disabled="saving || restoreConfirmText.trim() !== '復元'" @click="confirmRestore()">復元する</button>
           <button type="button" class="px-4 border rounded" @click="restorePreview = null">キャンセル</button>
         </div>
       </div>

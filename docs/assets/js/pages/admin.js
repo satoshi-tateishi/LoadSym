@@ -525,7 +525,7 @@ export function admin() {
 
     /** 全テーブルを丸ごと洗い替える復元。取り消せないため、確認テキストの入力を必須にしてある。 */
     async confirmRestore() {
-      if (this.restoreConfirmText !== '復元') return;
+      if (this.restoreConfirmText.trim() !== '復元') return;
       await withSaving(this, async () => {
         const counts = await restoreBackup(this.restorePreview.payload);
         this.restorePreview = null;
