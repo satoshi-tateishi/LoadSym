@@ -9,7 +9,8 @@
 import {
   snapPosition, resolveOverlaps, rotatedSize, rectsOverlap, findFreeSpot,
   toRect, toParts, rectToShape, boundsOf, normalizeShape, shapesOverlap,
-  findInvalidShapes, unionOutline, partsOverlap, partArea, DEFAULT_CLEARANCE_MM
+  findInvalidShapes, unionOutline, partsOverlap, partArea, DEFAULT_CLEARANCE_MM,
+  offsetConvexPolygon
 } from '../docs/assets/js/geometry.js';
 
 let pass = 0, fail = 0;
@@ -425,6 +426,16 @@ console.log('# findFreeSpot');
   const small = [{ id: 'small', x: 0, y: 0, w: 50, d: 50 }];
   eq('findFreeSpotがL字の凹みを空きとして見つける',
     findFreeSpot(small, [l], { w: 105, d: 105 }), { x: 50, y: 50 });
+}
+
+console.log('# offsetConvexPolygon');
+{
+  const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+  eq('正方形を外側へ広げる', offsetConvexPolygon(square, 2),
+    [{ x: -2, y: -2 }, { x: 12, y: -2 }, { x: 12, y: 12 }, { x: -2, y: 12 }]);
+  eq('巻き順が逆でも同じ広がり方になる', offsetConvexPolygon([...square].reverse(), 2),
+    [{ x: -2, y: 12 }, { x: 12, y: 12 }, { x: 12, y: -2 }, { x: -2, y: -2 }]);
+  eq('distance 0 は元の頂点をそのまま返す', offsetConvexPolygon(square, 0), square);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

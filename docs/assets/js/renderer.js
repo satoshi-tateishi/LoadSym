@@ -19,7 +19,7 @@
 // viewBox は実寸mmで取り、CSSの幅でスケールする。つまり「ズーム」は viewBox の
 // 操作だけで済み、描画側は常にmmで考えればよい。
 
-import { partArea, toParts, unionOutline } from './geometry.js';
+import { partArea, toParts, unionOutline, offsetConvexPolygon } from './geometry.js';
 import { bedOf, obstacleRects } from './packing.js';
 
 /**
@@ -35,6 +35,8 @@ const GRID_MM = 100;
 const LABEL_MM = 500;
 
 const COLOR_INVALID = '#ef4444';
+/** クリアランス目安線の色。実線と紛れないよう薄いグレーにする。 */
+const COLOR_CLEARANCE = '#cbd5e1';
 
 /** 荷台の実寸から、横向きに描いたときの描画領域の実寸を返す。 */
 export function viewSize(bed) {
@@ -57,13 +59,16 @@ function toViewRect(bed, rect) {
  *
  * @param {SVGElement} svg 描画先
  * @param {object} slot packing.js の slot
- * @param {{invalidIds?: Set<string>, selectedId?: string|null}} options
+ * @param {{invalidIds?: Set<string>, selectedId?: string|null, clearanceMm?: number}} options
+ *   clearanceMm を渡すと、各機材シンボルの周囲にその距離ぶん外側へ薄いグレーの
+ *   目安線を描く。省略時（0）は描かない。
  */
 export function renderTruck(svg, slot, options = {}) {
   const bed = bedOf(slot);
   const view = viewSize(bed);
   const invalidIds = options.invalidIds ?? new Set();
   const selectedId = options.selectedId ?? null;
+  const clearanceMm = options.clearanceMm ?? 0;
 
   svg.setAttribute(
     'viewBox',
@@ -90,7 +95,8 @@ export function renderTruck(svg, slot, options = {}) {
     renderGrid(bed),
     renderObstacles(slot, bed),
     slot.placements
-      .map((placement) => renderPlacement(placement, bed, invalidIds, selectedId, svg.dataset.maskNamespace))
+      .map((placement) =>
+        renderPlacement(placement, bed, invalidIds, selectedId, svg.dataset.maskNamespace, clearanceMm))
       .join('')
   ].join('');
 }
@@ -175,8 +181,8 @@ function renderObstacles(slot, bed) {
   return `<g class="obstacles" pointer-events="none">${items.join('')}</g>`;
 }
 
-function renderPlacement(placement, bed, invalidIds, selectedId, maskNamespace) {
-  const drawing = placementDrawing(placement);
+function renderPlacement(placement, bed, invalidIds, selectedId, maskNamespace, clearanceMm = 0) {
+  const drawing = placementDrawing(placement, clearanceMm);
   const invalid = invalidIds.has(placement.id);
   const selected = placement.id === selectedId;
 
@@ -220,11 +226,18 @@ function renderPlacement(placement, bed, invalidIds, selectedId, maskNamespace) 
  */
 function symbolPaths(drawing, maskId, strokeColor, strokeWidth, fillColor, fillOpacity, dashArray) {
   const dash = dashArray ? ` stroke-dasharray="${dashArray}"` : '';
+  // 塗り・輪郭より先に描いて一番下に沈める。ポインタ操作の対象にはしない
+  // （このシンボルをドラッグする判定は親<g>が担うため、線自体は掴めなくてよい）。
+  const clearance = drawing.clearancePath
+    ? `<path class="clearance" d="${drawing.clearancePath}" fill="none"` +
+      ` stroke="${COLOR_CLEARANCE}" stroke-width="6" pointer-events="none"/>`
+    : '';
   if (drawing.singlePart) {
-    return `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fillColor)}"` +
+    return clearance + `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fillColor)}"` +
       ` fill-opacity="${fillOpacity}" stroke="${strokeColor}" stroke-width="${strokeWidth}"${dash}/>`;
   }
   return [
+    clearance,
     drawing.hasCurves ? outlineMask(maskId, drawing, strokeWidth) : '',
     `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fillColor)}" fill-opacity="${fillOpacity}"/>`,
     `<path class="outline" d="${drawing.outlinePath}" fill="none"`,
@@ -236,8 +249,10 @@ function symbolPaths(drawing, maskId, strokeColor, strokeWidth, fillColor, fillO
 /**
  * 配置の各パーツを、配置原点からのローカルなビュー座標へ写す。
  * 絶対位置は親gのtranslateに持たせるので、ドラッグ中はtransformだけを更新できる。
+ *
+ * @param {number} clearanceMm クリアランス目安線を描く距離(mm)。0なら描かない。
  */
-function placementDrawing(placement) {
+function placementDrawing(placement, clearanceMm = 0) {
   const parts = toParts(placement);
   const boxes = parts.map((part) => ({
     x: part.y - placement.y,
@@ -264,6 +279,10 @@ function placementDrawing(placement) {
     w: rawLabelBox.w * 0.8,
     h: rawLabelBox.h * 0.8
   };
+  const bounds = boxes.reduce((result, box) => ({
+    x: Math.min(result.x, box.x), y: Math.min(result.y, box.y),
+    right: Math.max(result.right, box.x + box.w), bottom: Math.max(result.bottom, box.y + box.h)
+  }), { x: Infinity, y: Infinity, right: -Infinity, bottom: -Infinity });
 
   return {
     fillPath,
@@ -274,10 +293,8 @@ function placementDrawing(placement) {
     // （symbolPaths参照）。パーツ数はズーム後の座標変換に影響しないので、
     // partsをそのまま数えてよい。
     singlePart: parts.length === 1,
-    bounds: boxes.reduce((result, box) => ({
-      x: Math.min(result.x, box.x), y: Math.min(result.y, box.y),
-      right: Math.max(result.right, box.x + box.w), bottom: Math.max(result.bottom, box.y + box.h)
-    }), { x: Infinity, y: Infinity, right: -Infinity, bottom: -Infinity })
+    clearancePath: clearanceMm > 0 ? clearancePath(parts, boxes, placement, clearanceMm) : '',
+    bounds
   };
 }
 
@@ -289,11 +306,72 @@ function partSubpath(part, box, placement) {
     return `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 ${-r * 2} 0 Z`;
   }
   if (part.kind === 'polygon') {
-    return part.points.map((point, index) =>
-      `${index === 0 ? 'M' : 'L'} ${point.y - placement.y} ${-(point.x - placement.x)}`
-    ).join(' ') + ' Z';
+    return part.points.map((point, index) => {
+      const p = toViewPoint(point, placement);
+      return `${index === 0 ? 'M' : 'L'} ${p.x} ${p.y}`;
+    }).join(' ') + ' Z';
   }
   return rectSubpath(box);
+}
+
+/** 荷台座標の点(polygonの頂点)を、そのパーツが属する配置のローカルなビュー座標へ写す。 */
+function toViewPoint(point, placement) {
+  return { x: point.y - placement.y, y: -(point.x - placement.x) };
+}
+
+/**
+ * クリアランス設定値ぶん外側に離した薄いグレーの目安線のパスを返す。
+ *
+ * 単一パーツは形状どおりに正確なオフセットを取る（矩形は辺を、円は半径を、
+ * 凸多角形は各辺を外向きにdistanceだけ広げる）。複合パーツ（L字など）で
+ * 全パーツが矩形なら、各矩形を外側へ広げてから unionOutline で合わせると
+ * 正しい合成オフセットになる（矩形の合併に対するミンコフスキー和は、各矩形の
+ * ミンコフスキー和の合併と一致するため）。円や多角形が混ざる複合パーツは稀で、
+ * 厳密なオフセットは複雑になりすぎるため、外形bboxの単純な拡張で近似する。
+ */
+function clearancePath(parts, boxes, placement, clearanceMm) {
+  if (parts.length === 1) {
+    return singlePartClearancePath(parts[0], boxes[0], placement, clearanceMm);
+  }
+  if (parts.every((part) => part.kind === 'rect')) {
+    const expanded = boxes.map((box) => ({
+      x: box.x - clearanceMm,
+      y: box.y - clearanceMm,
+      w: box.w + clearanceMm * 2,
+      d: box.h + clearanceMm * 2
+    }));
+    return unionOutline(expanded).map(lineSubpath).join(' ');
+  }
+  const bounds = boxes.reduce((result, box) => ({
+    x: Math.min(result.x, box.x), y: Math.min(result.y, box.y),
+    right: Math.max(result.right, box.x + box.w), bottom: Math.max(result.bottom, box.y + box.h)
+  }), { x: Infinity, y: Infinity, right: -Infinity, bottom: -Infinity });
+  return rectSubpath({
+    x: bounds.x - clearanceMm,
+    y: bounds.y - clearanceMm,
+    w: bounds.right - bounds.x + clearanceMm * 2,
+    h: bounds.bottom - bounds.y + clearanceMm * 2
+  });
+}
+
+function singlePartClearancePath(part, box, placement, clearanceMm) {
+  if (part.kind === 'circle') {
+    const r = box.w / 2 + clearanceMm;
+    const cx = box.x + box.w / 2;
+    const cy = box.y + box.h / 2;
+    return `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 ${-r * 2} 0 Z`;
+  }
+  if (part.kind === 'polygon') {
+    const viewPoints = part.points.map((point) => toViewPoint(point, placement));
+    const offset = offsetConvexPolygon(viewPoints, clearanceMm);
+    return offset.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ') + ' Z';
+  }
+  return rectSubpath({
+    x: box.x - clearanceMm,
+    y: box.y - clearanceMm,
+    w: box.w + clearanceMm * 2,
+    h: box.h + clearanceMm * 2
+  });
 }
 
 function maskIdentifier(value) {

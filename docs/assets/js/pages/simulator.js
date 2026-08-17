@@ -730,7 +730,9 @@ export function simulator() {
           const raw = JSON.parse(JSON.stringify(slot));
           renderTruck(svg, raw, {
             invalidIds: summarize(raw, this.clearanceMm).invalidIds,
-            selectedId: this.selectedId
+            selectedId: this.selectedId,
+            // 機材置き場は隙間を問わない場所なので目安線も出さない（invalidGapOfと同じ理由）。
+            clearanceMm: isStaging(raw) ? 0 : this.clearanceMm
           });
         }
       });

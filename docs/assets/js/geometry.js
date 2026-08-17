@@ -374,6 +374,51 @@ function segmentsIntersect(a, b, c, d) {
   return onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b);
 }
 
+/**
+ * 凸多角形を外側へdistanceだけ膨らませた頂点列を返す（クリアランス表示用）。
+ *
+ * 各辺を外向き法線方向へdistanceだけ平行移動し、隣り合う辺どうしの交点を新しい
+ * 頂点にする。凸多角形を外側へ広げる変換は自己交差を起こさないため、この方法で
+ * 常に妥当な凸多角形が得られる（内側へ縮める場合はこの限りではない）。
+ *
+ * 外向きの向きは巻き順に依存させず、重心から各辺の中点への方向と同じ側を採る。
+ * 入力の頂点が時計回り／反時計回りのどちらでも同じ結果になる。
+ */
+export function offsetConvexPolygon(points, distance) {
+  const n = points.length;
+  if (n < 3 || distance === 0) return points;
+
+  const centerX = points.reduce((sum, point) => sum + point.x, 0) / n;
+  const centerY = points.reduce((sum, point) => sum + point.y, 0) / n;
+
+  const lines = points.map((a, index) => {
+    const b = points[(index + 1) % n];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy) || 1;
+    let nx = dy / length;
+    let ny = -dx / length;
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    if (nx * (midX - centerX) + ny * (midY - centerY) < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    return { px: a.x + nx * distance, py: a.y + ny * distance, dx, dy };
+  });
+
+  return points.map((_, index) => {
+    const prev = lines[(index - 1 + n) % n];
+    const current = lines[index];
+    const denom = prev.dx * current.dy - prev.dy * current.dx;
+    // 隣り合う辺が平行（denom = 0）になるのは、入力に重複頂点があるような壊れた
+    // 多角形だけ。normalizeShape の isConvex チェックを通った形では起こらない。
+    if (Math.abs(denom) < 1e-9) return { x: current.px, y: current.py };
+    const t = ((current.px - prev.px) * current.dy - (current.py - prev.py) * current.dx) / denom;
+    return { x: prev.px + t * prev.dx, y: prev.py + t * prev.dy };
+  });
+}
+
 /** パーツの実面積を返す。 */
 export function partArea(part) {
   if ((part.kind ?? 'rect') === 'circle') return Math.PI * (part.w / 2) ** 2;
