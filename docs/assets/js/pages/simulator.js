@@ -985,6 +985,17 @@ export function simulator() {
         console.error(error);
         this.errorMessage = translateError(error);
       }
+    },
+
+    /**
+     * ブラウザの印刷ヘッダー中央にはdocument.titleがそのまま出る。
+     * 印刷中だけレイアウト名に差し替え、afterprintで元に戻す。
+     */
+    printLayout() {
+      const original = document.title;
+      document.title = this.layoutName || '無題のレイアウト';
+      window.addEventListener('afterprint', () => { document.title = original; }, { once: true });
+      window.print();
     }
   };
 }

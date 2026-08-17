@@ -41,7 +41,7 @@
         <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
                 @click="exportPng()" :disabled="!hasContent">PNG</button>
         <button type="button" class="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
-                @click="window.print()" :disabled="!hasContent">印刷</button>
+                @click="printLayout()" :disabled="!hasContent">印刷</button>
         <button type="button" class="px-2 py-1 text-xs border rounded bg-blue-600 text-white disabled:opacity-30"
                 :disabled="readOnly || !hasContent" @click="openSaveDialog()">保存</button>
       </div>
