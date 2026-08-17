@@ -14,7 +14,7 @@ export function loginForm() {
       const { getSession } = await import('../auth.js');
       const session = await getSession();
       if (session) {
-        window.location.href = './simulator.html';
+        window.location.href = './layouts.html';
       }
     },
     async submit() {
@@ -24,7 +24,7 @@ export function loginForm() {
         // 初期ロードを軽くするため、認証モジュールは送信時に動的importする。
         const { loginWithPassword } = await import('../auth.js');
         await loginWithPassword(this.email, this.password);
-        window.location.href = './simulator.html';
+        window.location.href = './layouts.html';
       } catch (error) {
         console.error(error);
         // アカウントの存在を推測されないよう、原因を問わず同じ文言に丸める。
