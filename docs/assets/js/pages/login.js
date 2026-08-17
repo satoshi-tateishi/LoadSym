@@ -4,9 +4,17 @@ export function loginForm() {
     password: '',
     loading: false,
     errorMessage: '',
-    init() {
+    async init() {
       if (new URLSearchParams(window.location.search).get('reason') === 'disabled') {
         this.errorMessage = 'このアカウントは無効化されています。管理者にお問い合わせください。';
+        return;
+      }
+      // ブックマーク等でログイン画面に直接来ても、有効なセッションが残っていれば
+      // フォームを見せずに遷移する（session未確認のままログインを強いていた問題への対処）。
+      const { getSession } = await import('../auth.js');
+      const session = await getSession();
+      if (session) {
+        window.location.href = './simulator.html';
       }
     },
     async submit() {
