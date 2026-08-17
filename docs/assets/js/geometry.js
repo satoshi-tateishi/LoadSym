@@ -10,10 +10,10 @@
 // 吸着先・押し出し先・空き探索の目標であると同時に、エラー判定の基準でもある。
 // 設定を変えると、その隙間を確保できていない機材がその場で赤くなる（配置は動かさない）。
 /** クリアランスの既定値(mm)。 */
-export const DEFAULT_CLEARANCE_MM = 5;
+export const DEFAULT_CLEARANCE_MM = 10;
 /** ユーザーが設定できるクリアランスの範囲(mm)。 */
 export const MIN_SETTING_CLEARANCE_MM = 1;
-export const MAX_SETTING_CLEARANCE_MM = 10;
+export const MAX_SETTING_CLEARANCE_MM = 20;
 // エラー判定にも同じ設定値を使う。かつては「吸着の目標値」と「エラーの下限」を
 // 別々に持っていたが、数字が2つあると挙動を説明しきれない。設定値ひとつにして
 // 「設定した隙間を確保できていないものは赤」と一文で言い切れる形にしてある。

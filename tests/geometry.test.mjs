@@ -205,16 +205,17 @@ console.log('# unionOutline');
 }
 
 console.log('# snapPosition');
-// 吸着先の隙間はクリアランス設定に従う（既定5mm）。しきい値(50)とは別物。
-eq('左前の壁に吸着', snapPosition(shapeOf({ id: 'a', x: 3, y: 4, w: 600, d: 400 }), [], bed, 50), { x: 5, y: 5 });
+// 吸着先の隙間はクリアランス設定に従う。ここでは5mmを明示して既定値の変更から
+// 独立させる（しきい値(50)とは別物）。
+eq('左前の壁に吸着', snapPosition(shapeOf({ id: 'a', x: 3, y: 4, w: 600, d: 400 }), [], bed, 50, 5), { x: 5, y: 5 });
 eq('右奥の壁に吸着',
-  snapPosition(shapeOf({ id: 'a', x: 1385, y: 3585, w: 600, d: 400 }), [], bed, 50),
+  snapPosition(shapeOf({ id: 'a', x: 1385, y: 3585, w: 600, d: 400 }), [], bed, 50, 5),
   { x: 2000 - 600 - 5, y: 4000 - 400 - 5 });
-eq('遠ければ吸着しない', snapPosition(shapeOf({ id: 'a', x: 800, y: 900, w: 600, d: 400 }), [], bed, 50), { x: 800, y: 900 });
+eq('遠ければ吸着しない', snapPosition(shapeOf({ id: 'a', x: 800, y: 900, w: 600, d: 400 }), [], bed, 50, 5), { x: 800, y: 900 });
 // 既存機材 (10,10,600x400) の右隣にクリアランスぶん空けて付く
 const neighbour = [shapeOf({ id: 'a', x: 10, y: 10, w: 600, d: 400 })];
 eq('隣接スナップ',
-  snapPosition(shapeOf({ id: 'b', x: 615, y: 12, w: 600, d: 400 }), neighbour, bed, 50),
+  snapPosition(shapeOf({ id: 'b', x: 615, y: 12, w: 600, d: 400 }), neighbour, bed, 50, 5),
   { x: 615, y: 10 });
 eq('クリアランスを変えると吸着先も変わる',
   snapPosition(shapeOf({ id: 'b', x: 615, y: 12, w: 600, d: 400 }), neighbour, bed, 50, 10),
@@ -232,9 +233,9 @@ eq('1mmなら隣にぴったり寄せられる',
     ]
   };
   const moving = rectToShape({ id: 'm', x: 42, y: 102, w: 20, d: 20 });
-  eq('L字の袖の辺に吸着', snapPosition(moving, [l], { w: 300, d: 300 }, 10), { x: 45, y: 105 });
+  eq('L字の袖の辺に吸着', snapPosition(moving, [l], { w: 300, d: 300 }, 10, 5), { x: 45, y: 105 });
   const besideBody = rectToShape({ id: 'm', x: 103, y: 8, w: 20, d: 20 });
-  eq('L字の本体の辺に吸着', snapPosition(besideBody, [l], { w: 300, d: 300 }, 10), { x: 105, y: 5 });
+  eq('L字の本体の辺に吸着', snapPosition(besideBody, [l], { w: 300, d: 300 }, 10, 5), { x: 105, y: 5 });
 }
 
 console.log('# resolveOverlaps');
@@ -245,7 +246,7 @@ console.log('# resolveOverlaps');
     shapeOf({ id: 'b', x: 400, y: 100, w: 600, d: 400 })
   ];
   const r = resolveOverlaps(shapes, ['a'], bed);
-  eq('bが押し出される', boundsOf(r.shapes.find((x) => x.id === 'b').parts), { id: 'b', x: 705, y: 100, w: 600, d: 400 });
+  eq('bが押し出される', boundsOf(r.shapes.find((x) => x.id === 'b').parts), { id: 'b', x: 710, y: 100, w: 600, d: 400 });
   eq('aは不動', boundsOf(r.shapes.find((x) => x.id === 'a').parts), { id: 'a', x: 100, y: 100, w: 600, d: 400 });
   eq('打ち切っていない', r.truncated, false);
   eq('既定のクリアランス',
@@ -262,8 +263,8 @@ console.log('# resolveOverlaps');
   const r = resolveOverlaps(shapes, ['a'], bed);
   const b = boundsOf(r.shapes.find((x) => x.id === 'b').parts);
   const c = boundsOf(r.shapes.find((x) => x.id === 'c').parts);
-  eq('連鎖でbが移動', b.x, 705);
-  eq('連鎖でcも移動', c.x, 1310);
+  eq('連鎖でbが移動', b.x, 710);
+  eq('連鎖でcも移動', c.x, 1320);
   eq('b-c間クリアランス', c.x - (b.x + b.w), DEFAULT_CLEARANCE_MM);
   eq('振動せず収束', r.truncated, false);
 }
@@ -303,7 +304,7 @@ console.log('# resolveOverlaps');
   const target = rectToShape({ id: 'small', x: 30, y: 50, w: 20, d: 20 });
   const r = resolveOverlaps([l, target], ['l'], { w: 300, d: 300 });
   eq('L字に押された機材は凹み側へ逃げる', boundsOf(r.shapes[1].parts),
-    { id: 'small', x: 45, y: 50, w: 20, d: 20 });
+    { id: 'small', x: 50, y: 50, w: 20, d: 20 });
 }
 {
   const pusher = {
@@ -315,7 +316,7 @@ console.log('# resolveOverlaps');
   };
   const target = rectToShape({ id: 'target', x: 30, y: 0, w: 50, d: 40 });
   const r = resolveOverlaps([pusher, target], ['multi'], { w: 300, d: 300 }, { preferredAxis: 'x' });
-  eq('複数パーツの深い食い込み量で押し出す', boundsOf(r.shapes[1].parts).x, 125);
+  eq('複数パーツの深い食い込み量で押し出す', boundsOf(r.shapes[1].parts).x, 130);
   eq('複数パーツの食い込みが残らない', shapesOverlap(r.shapes[0], r.shapes[1], 5), false);
 }
 
@@ -381,7 +382,7 @@ console.log('# findFreeSpot');
   };
   const small = [{ id: 'small', kind: 'rect', x: 0, y: 0, w: 20, d: 20 }];
   eq('円のbbox内にある脇の隙間を空きとして見つける',
-    findFreeSpot(small, [circle], { w: 100, d: 100 }), { x: 5, y: 5 });
+    findFreeSpot(small, [circle], { w: 100, d: 100 }, [], 5), { x: 5, y: 5 });
 }
 {
   // 11tロングの内寸に幅1160を2つ並べる。2つ目は x=1180 にしか置けない。
@@ -391,8 +392,9 @@ console.log('# findFreeSpot');
   const first = findFreeSpot(parts, [], wide);
   eq('1つ目は左前の隅', first, { x: DEFAULT_CLEARANCE_MM, y: DEFAULT_CLEARANCE_MM });
 
-  const placed = [shapeOf({ id: 'a', x: first.x, y: first.y, w: 1160, d: 405 })];
-  eq('2つ目は隣に詰めて置ける', findFreeSpot(parts, placed, wide), { x: 1170, y: 5 });
+  // 以降はクリアランスを明示し、既定値の変更から独立させる（5mmで置いた前提）。
+  const placed = [shapeOf({ id: 'a', x: 5, y: 5, w: 1160, d: 405 })];
+  eq('2つ目は隣に詰めて置ける', findFreeSpot(parts, placed, wide, [], 5), { x: 1170, y: 5 });
   // クリアランスを広げると、その分だけ離して置く
   eq('10mmなら10mm空けて置く', findFreeSpot(parts, placed, wide, [], 10), { x: 1175, y: 10 });
 }
@@ -401,17 +403,17 @@ console.log('# findFreeSpot');
   const narrow = { w: 1700, d: 4400 };
   const parts = [{ id: '__candidate__', x: 0, y: 0, w: 1160, d: 405 }];
   const placed = [shapeOf({ id: 'a', x: 10, y: 10, w: 1160, d: 405 })];
-  eq('入らなければ後ろの列へ', findFreeSpot(parts, placed, narrow), { x: 5, y: 420 });
+  eq('入らなければ後ろの列へ', findFreeSpot(parts, placed, narrow, [], 5), { x: 5, y: 420 });
 }
 {
   // 障害物も避ける。避けた先が荷台からはみ出すなら null。
   const tiny = { w: 1000, d: 1000 };
   const tire = shapeOf({ id: 'obstacle:t', x: 0, y: 0, w: 400, d: 1000 });
   eq('障害物を避ける',
-    findFreeSpot([{ id: '__candidate__', x: 0, y: 0, w: 500, d: 500 }], [], tiny, [tire]),
+    findFreeSpot([{ id: '__candidate__', x: 0, y: 0, w: 500, d: 500 }], [], tiny, [tire], 5),
     { x: 405, y: 5 });
   eq('避けきれなければ null',
-    findFreeSpot([{ id: '__candidate__', x: 0, y: 0, w: 800, d: 500 }], [], tiny, [tire]),
+    findFreeSpot([{ id: '__candidate__', x: 0, y: 0, w: 800, d: 500 }], [], tiny, [tire], 5),
     null);
 }
 {
@@ -424,7 +426,7 @@ console.log('# findFreeSpot');
   };
   const small = [{ id: 'small', x: 0, y: 0, w: 50, d: 50 }];
   eq('findFreeSpotがL字の凹みを空きとして見つける',
-    findFreeSpot(small, [l], { w: 105, d: 105 }), { x: 50, y: 50 });
+    findFreeSpot(small, [l], { w: 105, d: 105 }, [], 5), { x: 50, y: 50 });
 }
 
 console.log('# offsetConvexPolygon');

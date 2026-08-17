@@ -55,7 +55,7 @@ console.log('# autoArrangeSlot');
   const b = { id: 'b', snapshot: snapshot('深い', 500, 800, 500, 10), x: 100, y: 1500, rotation: 0 };
   const slot = makeSlot([a, b]);
   const before = JSON.stringify(slot);
-  const result = autoArrangeSlot(slot);
+  const result = autoArrangeSlot(slot, 5);
   const byId = Object.fromEntries(result.placements.map((placement) => [placement.id, placement]));
   eq('自動配置に成功', result.status, 'arranged');
   eq('奥行きの大きい機材を左前へ置く', { x: byId.b.x, y: byId.b.y }, { x: 5, y: 5 });
@@ -75,7 +75,7 @@ console.log('# autoArrangeSlot');
 {
   const obstacle = { id: 'tire', label: 'タイヤハウス', x: 0, y: 0, w: 600, d: 1000 };
   const item = { id: 'item', snapshot: snapshot('ケース', 500, 500, 500, 10), x: 900, y: 900, rotation: 0 };
-  const result = autoArrangeSlot(makeSlot([item], [obstacle]));
+  const result = autoArrangeSlot(makeSlot([item], [obstacle]), 5);
   eq('障害物を避ける', { x: result.placements[0].x, y: result.placements[0].y }, { x: 605, y: 5 });
 }
 {
@@ -86,7 +86,7 @@ console.log('# autoArrangeSlot');
   const tiny = makeSlot(originals);
   tiny.truck.bedWidthMm = 1500;
   tiny.truck.bedDepthMm = 3500;
-  const result = autoArrangeSlot(tiny);
+  const result = autoArrangeSlot(tiny, 5);
   eq('入りきらなければ失敗', result.status, 'failed');
   eq('失敗時は元座標を保つ', result.placements, originals);
 }
@@ -116,13 +116,13 @@ console.log('# autoArrangeSlot');
     name: '11t-Long', bedWidthMm: 2363, bedDepthMm: 9090,
     bedHeightMm: 2730, maxPayloadKg: 11000
   };
-  const result = autoArrangeSlot(slot);
+  const result = autoArrangeSlot(slot, 5);
   const usedDepth = Math.max(...result.placements.map((placement) => {
     const turned = placement.rotation % 180 !== 0;
     return placement.y + (turned ? placement.snapshot.widthMm : placement.snapshot.depthMm);
   }));
   eq('積み込みテスト型を同一機材のブロックで配置する',
-    { status: result.status, invalid: summarize({ ...slot, placements: result.placements }).invalidCount },
+    { status: result.status, invalid: summarize({ ...slot, placements: result.placements }, 5).invalidCount },
     { status: 'arranged', invalid: 0 });
   eq('積み込みテスト型の使用奥行きを3295mm以下に保つ', usedDepth <= 3295, true);
 
@@ -133,8 +133,8 @@ console.log('# autoArrangeSlot');
   }));
   const zeroSlot = { ...slot, placements: zeroPlacements };
   const beforeZero = JSON.stringify(zeroSlot);
-  const zeroFirst = autoArrangeSlot(zeroSlot);
-  const zeroSecond = autoArrangeSlot(zeroSlot);
+  const zeroFirst = autoArrangeSlot(zeroSlot, 5);
+  const zeroSecond = autoArrangeSlot(zeroSlot, 5);
   const zeroDepth = Math.max(...zeroFirst.placements.map((placement) => {
     const turned = placement.rotation % 180 !== 0;
     return placement.y + (turned ? placement.snapshot.widthMm : placement.snapshot.depthMm);
@@ -205,12 +205,12 @@ console.log('# autoArrangeSlot');
     name: '60点計測用', bedWidthMm: 2410, bedDepthMm: 12000,
     bedHeightMm: 2660, maxPayloadKg: 11000
   };
-  const result = autoArrangeSlot(slot);
+  const result = autoArrangeSlot(slot, 5);
   eq('戦略上限に掛かる60点も正常に配置する',
     {
       status: result.status,
       count: result.placements.length,
-      invalid: summarize({ ...slot, placements: result.placements }).invalidCount
+      invalid: summarize({ ...slot, placements: result.placements }, 5).invalidCount
     },
     { status: 'arranged', count: 60, invalid: 0 });
 
@@ -251,7 +251,7 @@ console.log('# autoArrangeSlot');
     name: '11t-Long', bedWidthMm: 2410, bedDepthMm: 9500,
     bedHeightMm: 2730, maxPayloadKg: 11000
   };
-  const result = autoArrangeSlot(slot);
+  const result = autoArrangeSlot(slot, 5);
   const core = result.placements.filter(
     (placement) => placement.id !== result.stackSuggestion?.placementId
   );
@@ -268,7 +268,7 @@ console.log('# autoArrangeSlot');
     },
     { status: 'unchanged', id: 'upaar-2', name: 'UPA-AR', count: 20 });
   eq('B型の残り19点を床面へ正常に配置する',
-    { invalid: summarize({ ...slot, placements: result.placements }).invalidCount, coreDepth },
+    { invalid: summarize({ ...slot, placements: result.placements }, 5).invalidCount, coreDepth },
     { invalid: 0, coreDepth: result.stackSuggestion?.coreUsedDepthMm });
 }
 
@@ -330,7 +330,7 @@ console.log('# rotatePlacement');
     { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 420, y: 10, rotation: 0 },
     { id: 'p3', snapshot: snapshot('C', 400, 600, 500, 10), x: 830, y: 10, rotation: 0 }
   ]);
-  const { placements, truncated } = rotatePlacement(slot, 'p2');
+  const { placements, truncated } = rotatePlacement(slot, 'p2', 5);
   const byId = Object.fromEntries(placements.map((p) => [p.id, p]));
   eq('回転角が90度になる', byId.p2.rotation, 90);
   eq('回転した機材は動かない', { x: byId.p2.x, y: byId.p2.y }, { x: 420, y: 10 });
@@ -356,7 +356,7 @@ console.log('# movePlacement');
   const slot = makeSlot([
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 800, y: 800, rotation: 0 }
   ]);
-  const { placements } = movePlacement(slot, 'p1', { x: 4, y: 3 }, 60);
+  const { placements } = movePlacement(slot, 'p1', { x: 4, y: 3 }, 60, 5);
   eq('壁にスナップする', { x: placements[0].x, y: placements[0].y }, { x: 5, y: 5 });
 }
 {
@@ -486,10 +486,10 @@ console.log('# リアゲート側の仮置きゾーン（workingBedOf）');
   // 収まるならそちらへ詰め直される。
   const staged = { id: 'p1', snapshot: snapshot('仮置き中', 600, 600, 500, 10), x: 10, y: 4500, rotation: 0 };
   const slot = makeSlot([staged]);
-  const result = autoArrangeSlot(slot);
+  const result = autoArrangeSlot(slot, 5);
   eq('自動配置に成功', result.status, 'arranged');
   eq('実荷台の左前へ詰め直される', { x: result.placements[0].x, y: result.placements[0].y }, { x: 5, y: 5 });
-  eq('実荷台内に収まり赤くならない', summarize({ ...slot, placements: result.placements }).invalidCount, 0);
+  eq('実荷台内に収まり赤くならない', summarize({ ...slot, placements: result.placements }, 5).invalidCount, 0);
 }
 
 console.log('# movePlacementToSlot（エリア間移動）');
@@ -503,7 +503,7 @@ console.log('# movePlacementToSlot（エリア間移動）');
   target.slot = 2;
 
   // 荷台の左前あたりへドロップ → 壁にスナップし、先客とぶつかるので押し出される
-  const r = movePlacementToSlot(source, target, 'p1', { x: 5, y: 4 }, 60);
+  const r = movePlacementToSlot(source, target, 'p1', { x: 5, y: 4 }, 60, 5);
   eq('移動元から取り除かれる', r.source.length, 0);
   eq('移動先に追加される', r.target.length, 2);
 
@@ -513,8 +513,8 @@ console.log('# movePlacementToSlot（エリア間移動）');
   // p1(700x500) の下へ押し出される。右へ逃がすより移動量が小さいため。
   const pushed = r.target.find((p) => p.id === 't1');
   eq('先客が押し出される', { x: pushed.x, y: pushed.y }, { x: 10, y: 510 });
-  eq('既定のクリアランス', pushed.y - (moved.y + 500), 5);
-  eq('重なりが残らない', summarize({ ...target, placements: r.target }).invalidCount, 0);
+  eq('クリアランス5mmを確保', pushed.y - (moved.y + 500), 5);
+  eq('重なりが残らない', summarize({ ...target, placements: r.target }, 5).invalidCount, 0);
   eq('収束する', r.truncated, false);
 }
 {
@@ -557,11 +557,11 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
     { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 420, y: 10, rotation: 0 }
   ]);
-  const r = rotatePlacement(slot, 'p1');
+  const r = rotatePlacement(slot, 'p1', 5);
   eq('収まるなら回転できる', r.rejected, false);
   eq('回転が反映される', r.placements.find((p) => p.id === 'p1').rotation, 90);
   eq('隣が押し出される', r.placements.find((p) => p.id === 'p2').x, 615);
-  eq('押し出し後もエラーなし', summarize({ ...slot, placements: r.placements }).invalidCount, 0);
+  eq('押し出し後もエラーなし', summarize({ ...slot, placements: r.placements }, 5).invalidCount, 0);
 }
 {
   // 回転すると幅1800が内寸1700を超える。押し出す相手もいないので単純に棄却される。
@@ -592,14 +592,15 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
   const placement = slot.placements[0];
   // 壁からクリアランスぶん内側で止まる（既定5mm）。奥行き方向は実荷台ではなく
   // 仮置きゾーンの外壁（REFERENCE_DEPTH_MM）で止まる。
-  eq('右の壁で止まる', clampToBed({ ...placement, x: 9999, y: 10 }, slot).x, 1700 - 400 - 5);
-  eq('仮置きゾーンの奥で止まる', clampToBed({ ...placement, x: 10, y: 99999 }, slot).y, REFERENCE_DEPTH_MM - 600 - 5);
-  eq('左の壁で止まる', clampToBed({ ...placement, x: -500, y: 10 }, slot).x, 5);
+  eq('右の壁で止まる', clampToBed({ ...placement, x: 9999, y: 10 }, slot, 5).x, 1700 - 400 - 5);
+  eq('仮置きゾーンの奥で止まる',
+    clampToBed({ ...placement, x: 10, y: 99999 }, slot, 5).y, REFERENCE_DEPTH_MM - 600 - 5);
+  eq('左の壁で止まる', clampToBed({ ...placement, x: -500, y: 10 }, slot, 5).x, 5);
   eq('クリアランスを変えると止まる位置も変わる',
     clampToBed({ ...placement, x: 9999, y: -500 }, slot, 1), { x: 1700 - 400 - 1, y: 1 });
   // 回転後の外形で判定する（幅と奥行きが入れ替わる）
   const turned = { ...placement, rotation: 90, x: 9999, y: 99999 };
-  eq('回転後の外形で止まる', clampToBed(turned, slot), { x: 1700 - 600 - 5, y: REFERENCE_DEPTH_MM - 400 - 5 });
+  eq('回転後の外形で止まる', clampToBed(turned, slot, 5), { x: 1700 - 600 - 5, y: REFERENCE_DEPTH_MM - 400 - 5 });
 }
 {
   // 幅は実寸のままなので、荷台より大きい機材は左右方向で角に寄る。
@@ -619,7 +620,7 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
   eq('実荷台の奥行き(4400mm)を超えても壁で止めない',
     clampToBed({ ...slot.placements[0], x: 100, y: 6000 }, slot).y, 6000);
   eq('仮置きゾーンの奥（REFERENCE_DEPTH_MM）では止まる',
-    clampToBed({ ...slot.placements[0], x: 100, y: 99999 }, slot).y, REFERENCE_DEPTH_MM - 500 - 5);
+    clampToBed({ ...slot.placements[0], x: 100, y: 99999 }, slot, 5).y, REFERENCE_DEPTH_MM - 500 - 5);
   const r = movePlacement(slot, 'p1', { x: 100, y: 6000 }, 0);
   eq('仮置きゾーンへの移動は棄却しない', r.rejected, false);
   eq('実荷台をはみ出した位置に置ける', r.placements[0].y, 6000);

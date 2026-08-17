@@ -36,7 +36,7 @@ const LABEL_MM = 500;
 
 const COLOR_INVALID = '#ef4444';
 /** クリアランス目安線の色。実線と紛れないよう薄いグレーにする。 */
-const COLOR_CLEARANCE = '#cbd5e1';
+const COLOR_CLEARANCE = '#94a3b8';
 
 /** 荷台の実寸から、横向きに描いたときの描画領域の実寸を返す。 */
 export function viewSize(bed) {
