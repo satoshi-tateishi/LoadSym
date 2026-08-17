@@ -14,6 +14,22 @@ export const BACKUP_TABLES = [
   'layouts', 'layout_trucks', 'placements', 'profiles'
 ];
 
+/** 復元プレビュー・完了通知でテーブル名の代わりに表示する日本語ラベル。 */
+const BACKUP_TABLE_LABELS = {
+  equipment_categories: '機材カテゴリ',
+  equipments: '機材',
+  trucks: 'トラック',
+  truck_obstacles: '障害物',
+  layouts: 'レイアウト',
+  layout_trucks: '使用トラック',
+  placements: '配置',
+  profiles: 'ユーザー'
+};
+
+export function backupTableLabel(table) {
+  return BACKUP_TABLE_LABELS[table] ?? table;
+}
+
 export async function exportBackup() {
   const tables = {};
   await Promise.all(BACKUP_TABLES.map(async (table) => {

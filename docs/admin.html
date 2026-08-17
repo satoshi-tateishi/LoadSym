@@ -362,7 +362,7 @@
   <!-- ============ 復元の確認 ============ -->
   <div x-show="restorePreview" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
     <template x-if="restorePreview">
-      <div class="bg-white rounded p-4 w-full max-w-md text-xs space-y-3">
+      <div class="bg-white rounded p-4 w-full max-w-md max-h-[90vh] overflow-y-auto text-xs space-y-3">
         <p class="font-bold text-red-600">本当にこのバックアップで復元しますか？</p>
         <p x-show="errorMessage" x-text="errorMessage"
            class="text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2"></p>
@@ -372,15 +372,20 @@
         </p>
         <ul class="grid grid-cols-2 gap-x-3 gap-y-1 bg-gray-50 border rounded p-2">
           <template x-for="(count, table) in restorePreview.summary" :key="table">
-            <li><span x-text="table"></span>: <span x-text="count"></span>件</li>
+            <li class="flex">
+              <span class="w-24 flex-none text-right" x-text="tableLabel(table)"></span>
+              <span class="ml-1">: <span x-text="count"></span>件</span>
+            </li>
           </template>
         </ul>
         <label class="block">
           確認のため「復元」と入力してください。
-          <input type="text" x-model="restoreConfirmText" class="mt-1 w-full border rounded px-2 py-1">
+          <input type="text" x-model="restoreConfirmText" @keydown.enter.prevent
+                 class="mt-1 w-full border rounded px-2 py-1">
         </label>
         <div class="flex gap-2 pt-1">
-          <button type="button" class="flex-1 bg-red-600 text-white rounded py-2 disabled:opacity-50"
+          <button type="button" class="flex-1 rounded py-2 bg-red-600 text-white
+                                        disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed"
                   :disabled="saving || restoreConfirmText.trim() !== '復元'" @click="confirmRestore()">復元する</button>
           <button type="button" class="px-4 border rounded" @click="restorePreview = null">キャンセル</button>
         </div>

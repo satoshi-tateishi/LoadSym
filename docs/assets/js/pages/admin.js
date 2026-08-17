@@ -16,7 +16,7 @@ import {
 } from '../equipments.js';
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
 import {
-  exportBackup, restoreBackup, backupSummary,
+  exportBackup, restoreBackup, backupSummary, backupTableLabel,
   backupDropboxPath, backupLocalFilename, formatJst
 } from '../backup.js';
 import {
@@ -513,6 +513,10 @@ export function admin() {
       }
     },
 
+    tableLabel(table) {
+      return backupTableLabel(table);
+    },
+
     openRestorePreview(payload) {
       if (payload?.schema_version !== 1) {
         this.errorMessage = 'このファイルはLoadSymのバックアップ形式ではありません。';
@@ -530,7 +534,7 @@ export function admin() {
         const counts = await restoreBackup(this.restorePreview.payload);
         this.restorePreview = null;
         await this.reload();
-        const summary = Object.entries(counts).map(([table, n]) => `${table}: ${n}件`).join(' / ');
+        const summary = Object.entries(counts).map(([table, n]) => `${backupTableLabel(table)}: ${n}件`).join(' / ');
         this.noticeMessage = `復元が完了しました（${summary}）。`;
       });
     }
