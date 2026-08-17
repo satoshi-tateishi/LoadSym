@@ -117,11 +117,14 @@
                         x-text="`高さ超過 ${s.overHeightCount} 点`"></span>
                 </div>
               </template>
-              <button type="button"
-                      class="ml-auto px-2 py-1 text-[10px] border rounded bg-white hover:bg-gray-50 disabled:opacity-30 print-hidden"
-                      :disabled="readOnly || slot.placements.length === 0"
-                      @click.stop="autoArrange(slot.slot)">自動配置</button>
-              <button type="button" class="text-[10px] text-red-600 hover:underline print-hidden"
+              <!-- 精度が上がるまではAdmin限定のテスト機能。Admin以外にはDOMごと出さない。 -->
+              <template x-if="isAdmin">
+                <button type="button"
+                        class="ml-auto px-2 py-1 text-[10px] border rounded bg-white hover:bg-gray-50 disabled:opacity-30 print-hidden"
+                        :disabled="readOnly || slot.placements.length === 0"
+                        @click.stop="autoArrange(slot.slot)">自動配置</button>
+              </template>
+              <button type="button" class="ml-auto text-[10px] text-red-600 hover:underline print-hidden"
                       x-show="!readOnly && slots.length > 1" @click="removeSlot(slot.slot)">削除</button>
             </div>
 
