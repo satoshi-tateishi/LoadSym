@@ -725,6 +725,28 @@ export function simulator() {
       return null;
     },
 
+    /**
+     * 登録済みのデータを「共通テンプレート」と「自分のデータ」の間で移すために、
+     * 所有者を切り替えたときだけ user_id を更新値へ足す（機材・トラック共通）。
+     *
+     * user_id を毎回送ると、他人のデータを開いたときに所有者を奪ってしまう。
+     * RLSは「更新前の行」と「更新後の行」を別々のポリシーで判定するため、
+     * 自分のデータ（*_update_own）→ テンプレート（*_update_template）の
+     * 移動はそのまま通る。追加のポリシーは要らない。
+     */
+    withOwnerChange(form, values) {
+      // テンプレートを扱えるのはAdminだけ。Editor/Viewerからは所有者を一切送らない。
+      if (!this.isAdmin) return values;
+      const ownerId = form.asTemplate ? null : this.session.user.id;
+      if (ownerId === (form.user_id ?? null)) return values;
+      return { ...values, user_id: ownerId };
+    },
+
+    /** 新規作成時の所有者。Admin以外はテンプレートを作れないので、必ず自分のデータにする。 */
+    ownerIdForCreate(form) {
+      return this.isAdmin && form.asTemplate ? null : this.session.user.id;
+    },
+
     // ---------------- 機材フォーム ----------------
 
     openEquipmentForm(item) {
@@ -762,9 +784,9 @@ export function simulator() {
         };
 
         if (form.id) {
-          await updateEquipment(form.id, values);
+          await updateEquipment(form.id, this.withOwnerChange(form, values));
         } else {
-          await createEquipment(values, form.asTemplate ? null : this.session.user.id);
+          await createEquipment(values, this.ownerIdForCreate(form));
         }
 
         await this.reloadMasters();
@@ -833,8 +855,8 @@ export function simulator() {
         };
 
         const saved = form.id
-          ? await updateTruck(form.id, values)
-          : await createTruck(values, form.asTemplate ? null : this.session.user.id);
+          ? await updateTruck(form.id, this.withOwnerChange(form, values))
+          : await createTruck(values, this.ownerIdForCreate(form));
 
         await replaceObstacles(
           saved.id,

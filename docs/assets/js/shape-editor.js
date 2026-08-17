@@ -10,6 +10,31 @@ const MIN_SIZE_MM = 1;
 const MAX_SIZE_MM = 20000;
 const MIN_CANVAS_MM = 2500;
 const CANVAS_MARGIN_MM = 300;
+// プレビューのviewBoxはmm単位なので、ハンドルと番号の寸法もmmで持つ。
+const VERTEX_HANDLE_MM = 28;
+const VERTEX_LABEL_OFFSET_MM = 95;
+const VERTEX_LABEL_SIZE_MM = 140;
+const ACTIVE_INK = '#111827';
+
+// 画面ではCADと同じく横軸をx・縦軸をyと呼ぶ。プレビューは横が奥行・縦が幅なので、
+// 保存形式（x=幅 / y=奥行）とは名前が入れ替わる。読み替えはこの3つの表だけに閉じ込め、
+// 見出し行と入力行が同じ配列を回すことでラベルと中身がずれないようにする。
+// 幅・奥行・半径は物理寸法の名前なので、そのまま据え置く。
+const RECT_COLUMNS = [
+  { label: 'x', field: 'y' },     // 横位置（奥行方向）
+  { label: 'y', field: 'x' },     // 縦位置（幅方向）
+  { label: '幅', field: 'w' },
+  { label: '奥行', field: 'd' }
+];
+const CIRCLE_COLUMNS = [
+  { label: 'cx', field: 'cy' },
+  { label: 'cy', field: 'cx' },
+  { label: '半径', field: 'r' }
+];
+const POINT_COLUMNS = [
+  { label: 'x', field: 'y' },
+  { label: 'y', field: 'x' }
+];
 
 const roundMm = (value) => Math.round(Number(value));
 const snap = (value, fine = false) => Math.round(value / (fine ? FINE_GRID_MM : NORMAL_GRID_MM)) *
@@ -161,6 +186,11 @@ export function shapeEditor(form) {
     chamfers: [0, 0, 0, 0],
     canvasWidth: MIN_CANVAS_MM,
     canvasDepth: MIN_CANVAS_MM,
+    // 入力欄にフォーカス中の頂点 { part, vertex }。プレビュー側で黒く塗って対応を示す。
+    activeVertex: null,
+    rectColumns: RECT_COLUMNS,
+    circleColumns: CIRCLE_COLUMNS,
+    pointColumns: POINT_COLUMNS,
 
     init() {
       this.parts = editableParts(
@@ -227,9 +257,20 @@ export function shapeEditor(form) {
           if (selected) {
             shape += part.points.map((point, vertex) => {
               const view = viewPoint(point, this.canvasWidth);
-              return `<circle data-part-index="${index}" data-vertex-index="${vertex}"` +
-                ` cx="${view.x}" cy="${view.y}" r="28" fill="#fff"` +
-                ' stroke="#1d4ed8" stroke-width="10"/>';
+              // 入力欄の行と見比べられるよう、頂点には番号を添え、編集中の1点だけ黒く塗る。
+              const active = this.activeVertex?.part === index && this.activeVertex?.vertex === vertex;
+              const handle = `<circle data-part-index="${index}" data-vertex-index="${vertex}"` +
+                ` cx="${view.x}" cy="${view.y}" r="${VERTEX_HANDLE_MM}"` +
+                ` fill="${active ? ACTIVE_INK : '#fff'}"` +
+                ` stroke="${active ? ACTIVE_INK : '#1d4ed8'}" stroke-width="10"/>`;
+              // 番号はドラッグの当たり判定を奪わないよう pointer-events を切る。
+              // 形の塗りに埋もれないよう白フチ（paint-order）を付ける。
+              const label = `<text x="${view.x + VERTEX_LABEL_OFFSET_MM}" y="${view.y - VERTEX_LABEL_OFFSET_MM}"` +
+                ` font-size="${VERTEX_LABEL_SIZE_MM}" font-weight="${active ? '700' : '500'}"` +
+                ` fill="${active ? ACTIVE_INK : '#1d4ed8'}" paint-order="stroke"` +
+                ' stroke="#fff" stroke-width="24" stroke-linejoin="round"' +
+                ` text-anchor="middle" dominant-baseline="middle" pointer-events="none">${vertex + 1}</text>`;
+              return handle + label;
             }).join('');
           }
         } else {
@@ -245,7 +286,7 @@ export function shapeEditor(form) {
             shape += corners.map((point, corner) => {
               const view = viewPoint(point, this.canvasWidth);
               return `<circle data-part-index="${index}" data-chamfer-corner="${corner}"` +
-                ` cx="${view.x}" cy="${view.y}" r="28" fill="#fff"` +
+                ` cx="${view.x}" cy="${view.y}" r="${VERTEX_HANDLE_MM}" fill="#fff"` +
                 ' stroke="#7c3aed" stroke-width="10"/>';
             }).join('');
           }
@@ -291,6 +332,7 @@ export function shapeEditor(form) {
         Number(this.form.depth_mm)
       );
       this.selectedIndex = null;
+      this.activeVertex = null;
       this.cancelPolygon();
       this.error = '';
       this.open = true;
@@ -301,6 +343,7 @@ export function shapeEditor(form) {
       this.open = false;
       this.drag = null;
       this.draft = null;
+      this.activeVertex = null;
       this.cancelPolygon();
     },
 
@@ -553,18 +596,20 @@ export function shapeEditor(form) {
       }
 
       const limit = Math.floor(Math.min(part.w, part.d) / 2);
-      const [topLeft, topRight, bottomRight, bottomLeft] = this.chamfers.map((value) =>
+      // 隅の名前は画面の見た目に合わせる。データの (x,y) は viewPoint() で90度回るため、
+      // データ上の (x, y) 最小の隅はプレビューでは「左下」に出る。添字の意味は変えていない。
+      const [bottomLeft, topLeft, topRight, bottomRight] = this.chamfers.map((value) =>
         Math.max(0, Math.min(roundMm(value), limit))
       );
       const raw = [
-        { x: part.x + topLeft, y: part.y },
-        { x: part.x + part.w - topRight, y: part.y },
-        { x: part.x + part.w, y: part.y + topRight },
-        { x: part.x + part.w, y: part.y + part.d - bottomRight },
-        { x: part.x + part.w - bottomRight, y: part.y + part.d },
-        { x: part.x + bottomLeft, y: part.y + part.d },
-        { x: part.x, y: part.y + part.d - bottomLeft },
-        { x: part.x, y: part.y + topLeft }
+        { x: part.x + bottomLeft, y: part.y },
+        { x: part.x + part.w - topLeft, y: part.y },
+        { x: part.x + part.w, y: part.y + topLeft },
+        { x: part.x + part.w, y: part.y + part.d - topRight },
+        { x: part.x + part.w - topRight, y: part.y + part.d },
+        { x: part.x + bottomRight, y: part.y + part.d },
+        { x: part.x, y: part.y + part.d - bottomRight },
+        { x: part.x, y: part.y + bottomLeft }
       ];
       const points = raw.filter((point, index) =>
         index === 0 || point.x !== raw[index - 1].x || point.y !== raw[index - 1].y
@@ -639,6 +684,16 @@ export function shapeEditor(form) {
       this.syncForm();
     },
 
+    /** 入力欄とプレビューの頂点を対応づける。Tab移動でも効くよう、ここで選択も移す。 */
+    focusVertex(index, vertex) {
+      this.selectedIndex = index;
+      this.activeVertex = { part: index, vertex };
+    },
+
+    blurVertex() {
+      this.activeVertex = null;
+    },
+
     updatePoint(index, vertex, field, value) {
       const part = this.parts[index];
       if (part?.kind !== 'polygon') return;
@@ -659,6 +714,8 @@ export function shapeEditor(form) {
       if (index === null || !this.parts[index]) return;
       this.parts.splice(index, 1);
       this.selectedIndex = null;
+      // 削除で添字がずれるので、消えた頂点を指したまま黒く塗り続けないようにする。
+      this.activeVertex = null;
       this.syncForm();
     },
 

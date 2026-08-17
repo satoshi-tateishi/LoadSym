@@ -5,7 +5,7 @@
     "build:css": "tailwindcss -i ./docs/assets/css/tailwind.src.css -o ./docs/assets/css/styles.css --minify",
     "watch:css": "tailwindcss -i ./docs/assets/css/tailwind.src.css -o ./docs/assets/css/styles.css --watch",
     "build:vendor": "esbuild node_modules/@supabase/supabase-js/dist/index.mjs --bundle --format=esm --platform=browser --minify --outfile=docs/assets/vendor/supabase-js.esm.js",
-    "serve": "python3 -m http.server 8765 --directory docs",
+    "serve": "python3 -m http.server 8090 --directory docs",
     "test": "node tests/geometry.test.mjs && node tests/packing.test.mjs && node tests/shape-editor.test.mjs"
   },
   "devDependencies": {

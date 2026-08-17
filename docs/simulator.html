@@ -203,7 +203,6 @@
                   </button>
                   <span class="text-[10px] text-gray-500 tabular-nums shrink-0"
                         x-text="`${item.width_mm}×${item.depth_mm}×${item.height_mm} / ${item.weight_kg}kg`"></span>
-                  <span x-show="item.shape" class="rounded bg-indigo-100 px-1 py-0.5 text-[9px] text-indigo-700">異形</span>
                   <button type="button" class="text-[10px] text-blue-600 hover:underline shrink-0"
                           x-show="canEditItem(item)" @click="openEquipmentForm(item)">編集</button>
                 </li>
@@ -262,9 +261,11 @@
           </div>
           <div>
             <label class="block text-xs mb-1">カテゴリ</label>
+            <!-- x-model は option が x-for で描かれる前に初期化されるため、値だけでは選択が復元されない。
+                 :selected を option 側に持たせて、描画時に保存済みのカテゴリを選ばせる。 -->
             <select x-model="form.category_id" required class="w-full border rounded px-2 py-1 text-sm">
               <template x-for="category in categories" :key="category.id">
-                <option :value="category.id" x-text="category.name"></option>
+                <option :value="category.id" :selected="category.id === form.category_id" x-text="category.name"></option>
               </template>
             </select>
             <p class="text-[10px] text-gray-500 mt-1" x-show="isAdmin">
@@ -293,7 +294,6 @@
                 <p class="text-[10px] text-gray-500"
                    x-text="form.shape ? `パーツ形状（外形 ${form.width_mm} × ${form.depth_mm} mm）` : '通常の矩形'"></p>
               </div>
-              <span x-show="form.shape" class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-700">異形</span>
               <button type="button" class="ml-auto rounded border bg-white px-2 py-1 text-xs text-blue-600" @click="openEditor()">形を編集</button>
             </div>
 
@@ -322,8 +322,8 @@
               <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_18rem]">
                 <div>
                   <div class="relative rounded border bg-white p-5">
-                    <span class="absolute left-1 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] text-gray-500">幅 x（下が0）</span>
-                    <span class="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] text-gray-500">奥行 y（左が0）→</span>
+                    <span class="absolute left-1 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] text-gray-500">幅 y（下が0）→</span>
+                    <span class="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] text-gray-500">奥行 x（左が0）→</span>
                     <svg x-ref="canvas" class="block aspect-[2/1] w-full touch-none bg-slate-50"
                          x-effect="$el.setAttribute('viewBox', viewBox)" preserveAspectRatio="xMidYMid meet"
                          @pointerdown="canvasPointerDown($event)" @pointermove="pointerMove($event)"
@@ -351,31 +351,32 @@
                         <button type="button" class="ml-auto text-sm text-red-600" title="削除"
                                 @click.stop="removePart(index)">×</button>
                       </div>
+                      <!-- 見出しと入力は同じ列定義（shape-editor.js）を回す。
+                           画面のx（横）はデータのy、画面のy（縦）はデータのxに対応する。 -->
                       <div x-show="part.kind === 'rect'">
                         <div class="grid grid-cols-4 gap-1 text-center text-[10px] text-gray-500">
-                          <span>X</span>
-                          <span>Y</span>
-                          <span>幅</span>
-                          <span>奥行</span>
+                          <template x-for="col in rectColumns" :key="col.label">
+                            <span x-text="col.label"></span>
+                          </template>
                         </div>
                         <div class="grid grid-cols-4 gap-1">
-                          <template x-for="field in ['x','y','w','d']">
-                            <input type="number" :value="part[field]"
-                                   @change="updatePart(index, field, $event.target.value)"
+                          <template x-for="col in rectColumns" :key="col.label">
+                            <input type="number" :value="part[col.field]"
+                                   @change="updatePart(index, col.field, $event.target.value)"
                                    class="min-w-0 rounded border px-1 py-1 text-xs">
                           </template>
                         </div>
                       </div>
                       <div x-show="part.kind === 'circle'">
                         <div class="grid grid-cols-3 gap-1 text-center text-[10px] text-gray-500">
-                          <span>cx</span>
-                          <span>cy</span>
-                          <span>半径</span>
+                          <template x-for="col in circleColumns" :key="col.label">
+                            <span x-text="col.label"></span>
+                          </template>
                         </div>
                         <div class="grid grid-cols-3 gap-1">
-                          <template x-for="field in ['cx','cy','r']">
-                            <input type="number" :value="part[field]"
-                                   @change="updatePart(index, field, $event.target.value)"
+                          <template x-for="col in circleColumns" :key="col.label">
+                            <input type="number" :value="part[col.field]"
+                                   @change="updatePart(index, col.field, $event.target.value)"
                                    class="min-w-0 rounded border px-1 py-1 text-xs">
                           </template>
                         </div>
@@ -383,15 +384,21 @@
                       <div x-show="part.kind === 'polygon'" class="space-y-1">
                         <p class="text-[10px] text-gray-500"
                            x-text="`外形 ${partBounds(part).w} × ${partBounds(part).d} mm`"></p>
+                        <div class="grid grid-cols-[1.5rem_1fr_1fr] gap-1 text-center text-[10px] text-gray-500">
+                          <span></span>
+                          <template x-for="col in pointColumns" :key="col.label">
+                            <span x-text="col.label"></span>
+                          </template>
+                        </div>
                         <template x-for="(point, vertex) in part.points || []">
                           <div class="grid grid-cols-[1.5rem_1fr_1fr] gap-1">
                             <span class="text-center text-[10px]" x-text="vertex + 1"></span>
-                            <input type="number" :value="point.x"
-                                   @change="updatePoint(index, vertex, 'x', $event.target.value)"
-                                   class="min-w-0 rounded border px-1 py-1 text-xs">
-                            <input type="number" :value="point.y"
-                                   @change="updatePoint(index, vertex, 'y', $event.target.value)"
-                                   class="min-w-0 rounded border px-1 py-1 text-xs">
+                            <template x-for="col in pointColumns" :key="col.label">
+                              <input type="number" :value="point[col.field]"
+                                     @focus="focusVertex(index, vertex)" @blur="blurVertex()"
+                                     @change="updatePoint(index, vertex, col.field, $event.target.value)"
+                                     class="min-w-0 rounded border px-1 py-1 text-xs">
+                            </template>
                           </div>
                         </template>
                       </div>
@@ -399,7 +406,7 @@
                   </template>
                   <div x-show="canChamfer" class="rounded border border-violet-200 bg-violet-50 p-2">
                     <p class="mb-1 text-[10px] text-violet-800">
-                      量を入れてから「角落とし」を押す（左上 / 右上 / 右下 / 左下）
+                      量を入れてから「角落とし」を押す（左下 / 左上 / 右上 / 右下）
                     </p>
                     <div class="grid grid-cols-4 gap-1">
                       <template x-for="(_, corner) in chamfers">
@@ -447,10 +454,20 @@
               </template>
             </div>
           </div>
-          <label class="flex items-center gap-2 text-xs" x-show="isAdmin">
-            <input type="checkbox" x-model="form.asTemplate" :disabled="!!form.id">
-            共通テンプレートとして登録する（全ユーザーが利用できます）
-          </label>
+          <!-- Admin以外にはDOMごと出さない（x-showでは要素が残り、開発者ツールから触れてしまうため）。
+               登録済みでも切り替えられる。Adminが自分の機材を後からテンプレートへ引き上げたい場面があるため。 -->
+          <template x-if="isAdmin">
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 text-xs">
+                <input type="checkbox" x-model="form.asTemplate">
+                共通テンプレートとして登録する（全ユーザーが利用できます）
+              </label>
+              <p class="text-[10px] text-gray-500" x-show="form.id && form.asTemplate !== (form.user_id === null)"
+                 x-text="form.asTemplate
+                   ? '保存すると共通テンプレートへ移動し、全ユーザーが使えるようになります。'
+                   : '保存すると共通テンプレートから外れ、自分のデータになります。'"></p>
+            </div>
+          </template>
           <div class="flex gap-2 pt-2">
             <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
                     :disabled="saving">保存</button>
@@ -499,12 +516,24 @@
               <span class="text-xs font-bold">荷台内の障害物（タイヤハウス・柱など）</span>
               <button type="button" class="ml-auto text-xs text-blue-600 hover:underline" @click="addObstacleRow()">＋追加</button>
             </div>
-            <p class="text-[10px] text-gray-500 mb-1">荷台の左前を原点(0,0)とした位置とサイズを mm で入力します。</p>
+            <p class="text-[10px] text-gray-500 mb-1">
+              荷台の左前＝図の左下を原点(0,0)に、x は奥行方向（右へ）、y は幅方向（上へ）の位置を mm で入力します。
+            </p>
+            <!-- 形状エディタと同じく、画面の横軸をx・縦軸をyと呼ぶ。保存列は x_mm=幅方向 / y_mm=奥行方向 の
+                 ままなので、x欄は y_mm に、y欄は x_mm に結び付ける。幅・奥行は寸法名なのでそのまま。 -->
+            <div x-show="truckForm.obstacles.length"
+                 class="grid grid-cols-6 gap-1 text-center text-[10px] text-gray-500">
+              <span class="col-span-2"></span>
+              <span>x</span>
+              <span>y</span>
+              <span>幅</span>
+              <span>奥行</span>
+            </div>
             <template x-for="(obstacle, index) in truckForm.obstacles" :key="index">
               <div class="grid grid-cols-6 gap-1 mb-1 items-center">
                 <input x-model="obstacle.label" placeholder="名称" class="col-span-2 border rounded px-1 py-0.5 text-xs">
-                <input type="number" x-model.number="obstacle.x_mm" placeholder="X" class="border rounded px-1 py-0.5 text-xs">
-                <input type="number" x-model.number="obstacle.y_mm" placeholder="Y" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" x-model.number="obstacle.y_mm" placeholder="x" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" x-model.number="obstacle.x_mm" placeholder="y" class="border rounded px-1 py-0.5 text-xs">
                 <input type="number" x-model.number="obstacle.width_mm" placeholder="幅" class="border rounded px-1 py-0.5 text-xs">
                 <div class="flex gap-1">
                   <input type="number" x-model.number="obstacle.depth_mm" placeholder="奥行" class="w-full border rounded px-1 py-0.5 text-xs">
@@ -514,10 +543,20 @@
             </template>
           </div>
 
-          <label class="flex items-center gap-2 text-xs" x-show="isAdmin">
-            <input type="checkbox" x-model="truckForm.asTemplate" :disabled="!!truckForm.id">
-            共通テンプレートとして登録する
-          </label>
+          <!-- 機材と同じく、Admin以外にはDOMごと出さない。登録済みでも行き来できる。 -->
+          <template x-if="isAdmin">
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 text-xs">
+                <input type="checkbox" x-model="truckForm.asTemplate">
+                共通テンプレートとして登録する
+              </label>
+              <p class="text-[10px] text-gray-500"
+                 x-show="truckForm.id && truckForm.asTemplate !== (truckForm.user_id === null)"
+                 x-text="truckForm.asTemplate
+                   ? '保存すると共通テンプレートへ移動し、全ユーザーが使えるようになります。'
+                   : '保存すると共通テンプレートから外れ、自分のデータになります。'"></p>
+            </div>
+          </template>
           <div class="flex gap-2 pt-2">
             <button type="submit" class="flex-1 bg-blue-600 text-white rounded py-2 text-sm disabled:opacity-50"
                     :disabled="saving">保存</button>
