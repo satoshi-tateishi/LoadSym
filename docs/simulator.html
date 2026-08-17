@@ -255,6 +255,10 @@
         <!-- x-if で null を除外した時点のフォームを別名にし、内側の形状エディタを含む全項目で同じオブジェクトを参照する。 -->
         <div x-data="{ form: equipmentForm }" class="space-y-3">
           <h3 class="font-bold" x-text="form.id ? '機材を編集' : '機材を追加'"></h3>
+          <!-- 入力欄とパレットを左右に並べ、縦を詰める。13インチのノートでもスクロールせずに
+               全体を見せるため。形状エディタだけはこの外に置き、キャンバスの幅を削らない。 -->
+          <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+          <div class="space-y-3 min-w-0">
           <div>
             <label class="block text-xs mb-1">名称</label>
             <input x-model="form.name" required class="w-full border rounded px-2 py-1 text-sm">
@@ -262,14 +266,21 @@
           <div>
             <label class="block text-xs mb-1">カテゴリ</label>
             <!-- x-model は option が x-for で描かれる前に初期化されるため、値だけでは選択が復元されない。
-                 :selected を option 側に持たせて、描画時に保存済みのカテゴリを選ばせる。 -->
-            <select x-model="form.category_id" required class="w-full border rounded px-2 py-1 text-sm">
+                 :selected を option 側に持たせて、描画時に保存済みのカテゴリを選ばせる。
+                 識別カラーの差し替えには $event の値を渡す。x-model と @change は同じ change の
+                 購読者で、どちらが先に走るかに依存させたくないため。 -->
+            <select x-model="form.category_id" required
+                    @change="applyCategoryColor($event.target.value)"
+                    class="w-full border rounded px-2 py-1 text-sm">
               <template x-for="category in categories" :key="category.id">
                 <option :value="category.id" :selected="category.id === form.category_id" x-text="category.name"></option>
               </template>
             </select>
-            <p class="text-[10px] text-gray-500 mt-1" x-show="isAdmin">
-              カテゴリの追加・並び替えは管理画面で行えます。
+            <p class="text-[10px] text-gray-500 mt-1">
+              カテゴリを選ぶと、識別カラーがそのカテゴリの既定色に切り替わります。
+            </p>
+            <p class="text-[10px] text-gray-500" x-show="isAdmin">
+              カテゴリの追加・並び替え・既定色の変更は管理画面で行えます。
             </p>
           </div>
           <div class="grid grid-cols-3 gap-2">
@@ -285,6 +296,32 @@
               <label class="block text-xs mb-1">高さ mm</label>
               <input type="number" min="1" x-model.number="form.height_mm" required class="w-full border rounded px-2 py-1 text-sm">
             </div>
+          </div>
+          <div>
+            <label class="block text-xs mb-1">重量 kg</label>
+            <input type="number" min="0" step="0.1" x-model.number="form.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
+          </div>
+          </div>
+          <!-- パレットは1マスを固定サイズにする。aspect-square だとダイアログ幅に比例して
+               1マスが大きくなり、17行で1000px近くまで伸びてしまうため。 -->
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <label class="text-xs">識別カラー</label>
+              <span class="w-6 h-4 rounded border" :style="`background:${form.color}`"></span>
+              <code class="text-[10px] text-gray-500" x-text="form.color"></code>
+            </div>
+            <div class="grid w-max max-w-full gap-px border rounded p-1 bg-gray-100"
+                 :style="`grid-template-columns: repeat(${paletteShades}, 18px)`">
+              <template x-for="swatch in palette" :key="swatch.id">
+                <button type="button" class="h-[18px] rounded-[2px] hover:outline hover:outline-1 hover:outline-gray-900"
+                        :style="`background:${swatch.hex}`"
+                        :class="form.color === swatch.hex ? 'outline outline-2 outline-gray-900 z-10' : ''"
+                        :title="`${swatch.group} ${swatch.shade} / ${swatch.hex}`"
+                        @click="form.color = swatch.hex"></button>
+              </template>
+            </div>
+            <p class="mt-1 text-[10px] text-gray-400">赤はエラー表示に使うため選べません</p>
+          </div>
           </div>
           <!-- shapeEditor は管理画面と共有。フォームの shape を直接読み書きする。 -->
           <div x-data="shapeEditor(form)" @keydown.window="editorKey($event)">
@@ -314,8 +351,12 @@
                 <button x-show="canChamfer" type="button"
                         class="rounded border border-violet-300 px-2 py-1 text-xs text-violet-700"
                         @click="applyChamfer()">角落とし</button>
+                <button x-show="selectedPart && selectedPart.kind !== 'circle'" type="button"
+                        class="rounded border border-teal-300 px-2 py-1 text-xs text-teal-700"
+                        title="選択中のパーツをその場で90度回します"
+                        @click="rotatePart()">90°回転</button>
                 <span class="text-[10px] text-gray-500">
-                  100mmグリッド（Shift中は10mm）。2500mmを超える寸法は右の数値欄で調整できます。
+                  100mmグリッド（Shift中は10mm）。プレビューに入らない寸法は右の数値欄で調整できます。
                 </span>
                 <span class="ml-auto text-xs font-bold tabular-nums" x-text="`外形 幅 × 奥行: ${previewSize}`"></span>
               </div>
@@ -330,14 +371,23 @@
                          @pointerup="pointerUp($event)" @pointercancel="pointerUp($event)"
                          @dblclick.prevent="tool === 'polygon' && finishPolygon()">
                       <defs>
-                        <pattern id="shape-grid-simulator" width="100" height="100" patternUnits="userSpaceOnUse">
-                          <path d="M 100 0 L 0 0 0 100" fill="none" stroke="#cbd5e1" stroke-width="3"/>
+                        <!-- 見た目の刻みはズームに合わせて変える。100mm固定だと引いたとき線が潰れる。 -->
+                        <pattern id="shape-grid-simulator" :width="gridStepMm" :height="gridStepMm" patternUnits="userSpaceOnUse">
+                          <path :d="gridPath" fill="none" stroke="#cbd5e1" :stroke-width="decor.partStroke * 0.4"/>
                         </pattern>
                       </defs>
                       <rect width="100%" height="100%" fill="url(#shape-grid-simulator)"/>
                       <g x-html="partsMarkup"></g>
                       <g x-html="draftMarkup"></g>
                     </svg>
+                    <!-- ズームは右下に重ねる。横軸ラベル（bottom-1 left-1/2）とは重ならない。 -->
+                    <div class="absolute bottom-1 right-1 z-10 flex items-center gap-1 rounded border bg-white/90 px-1">
+                      <button type="button" class="px-1 text-xs disabled:opacity-30" title="縮小"
+                              :disabled="!canZoomOut" @click="zoomOut()">−</button>
+                      <span class="text-[10px] tabular-nums text-gray-500" x-text="zoomLabel"></span>
+                      <button type="button" class="px-1 text-xs disabled:opacity-30" title="拡大"
+                              :disabled="!canZoomIn" @click="zoomIn()">＋</button>
+                    </div>
                   </div>
                 </div>
                 <div class="max-h-72 overflow-y-auto">
@@ -384,14 +434,15 @@
                       <div x-show="part.kind === 'polygon'" class="space-y-1">
                         <p class="text-[10px] text-gray-500"
                            x-text="`外形 ${partBounds(part).w} × ${partBounds(part).d} mm`"></p>
-                        <div class="grid grid-cols-[1.5rem_1fr_1fr] gap-1 text-center text-[10px] text-gray-500">
+                        <div class="grid grid-cols-[1.5rem_1fr_1fr_1.25rem] gap-1 text-center text-[10px] text-gray-500">
                           <span></span>
                           <template x-for="col in pointColumns" :key="col.label">
                             <span x-text="col.label"></span>
                           </template>
+                          <span></span>
                         </div>
                         <template x-for="(point, vertex) in part.points || []">
-                          <div class="grid grid-cols-[1.5rem_1fr_1fr] gap-1">
+                          <div class="grid grid-cols-[1.5rem_1fr_1fr_1.25rem] items-center gap-1">
                             <span class="text-center text-[10px]" x-text="vertex + 1"></span>
                             <template x-for="col in pointColumns" :key="col.label">
                               <input type="number" :value="point[col.field]"
@@ -399,8 +450,16 @@
                                      @change="updatePoint(index, vertex, col.field, $event.target.value)"
                                      class="min-w-0 rounded border px-1 py-1 text-xs">
                             </template>
+                            <!-- 3点未満の多角形は保存できないので、そこまで減ったら押せなくする。 -->
+                            <button type="button" class="text-xs text-red-600 disabled:opacity-20"
+                                    title="この頂点を削除"
+                                    :disabled="(part.points || []).length <= 3"
+                                    @click.stop="removeVertex(index, vertex)">×</button>
                           </div>
                         </template>
+                        <p class="text-[10px] text-gray-400">
+                          頂点を増やすには、プレビューの辺の中点にある＋を押します。
+                        </p>
                       </div>
                     </div>
                   </template>
@@ -429,29 +488,6 @@
                         class="ml-auto rounded border border-red-300 px-3 py-1.5 text-xs text-red-600"
                         @click="resetToRectangle()">矩形に戻す</button>
               </div>
-            </div>
-          </div>
-          <div>
-            <label class="block text-xs mb-1">重量 kg</label>
-            <input type="number" min="0" step="0.1" x-model.number="form.weight_kg" class="w-full border rounded px-2 py-1 text-sm">
-          </div>
-
-          <div>
-            <div class="flex items-center gap-2 mb-1">
-              <label class="text-xs">識別カラー</label>
-              <span class="w-6 h-4 rounded border" :style="`background:${form.color}`"></span>
-              <code class="text-[10px] text-gray-500" x-text="form.color"></code>
-              <span class="ml-auto text-[10px] text-gray-400">赤はエラー表示に使うため選べません</span>
-            </div>
-            <div class="grid gap-px border rounded p-1 bg-gray-100"
-                 :style="`grid-template-columns: repeat(${paletteShades}, minmax(0, 1fr))`">
-              <template x-for="swatch in palette" :key="swatch.id">
-                <button type="button" class="aspect-square rounded-[2px] hover:outline hover:outline-1 hover:outline-gray-900"
-                        :style="`background:${swatch.hex}`"
-                        :class="form.color === swatch.hex ? 'outline outline-2 outline-gray-900 z-10' : ''"
-                        :title="`${swatch.group} ${swatch.shade} / ${swatch.hex}`"
-                        @click="form.color = swatch.hex"></button>
-              </template>
             </div>
           </div>
           <!-- Admin以外にはDOMごと出さない（x-showでは要素が残り、開発者ツールから触れてしまうため）。

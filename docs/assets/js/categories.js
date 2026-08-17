@@ -3,7 +3,8 @@
 
 import { supabase } from './supabase-client.js';
 
-const COLUMNS = 'id, name, sort_order';
+// default_color は機材の識別カラーの既定値。カテゴリを選んだ時点で機材フォームへ入れる。
+const COLUMNS = 'id, name, sort_order, default_color';
 
 export async function listCategories() {
   const { data, error } = await supabase

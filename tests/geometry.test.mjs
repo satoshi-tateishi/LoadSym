@@ -101,6 +101,13 @@ console.log('# shape');
   eq('2点の多角形はフォールバック', normalizeShape({ parts: [{ kind: 'polygon', points: [
     { x: 0, y: 0 }, { x: 100, y: 0 }
   ] }] }, 600, 400), fallback);
+  // 形状エディタは辺の中点に頂点を挿せる。挿した直後の点は両隣と一直線に並ぶので、
+  // 共線を許さない実装にすると「追加した瞬間に保存できない形」になってしまう。
+  eq('辺の中点に頂点を足した多角形は通る', normalizeShape({ parts: [{ kind: 'polygon', points: [
+    { x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+  ] }] }, 600, 400), [{ kind: 'polygon', x: 0, y: 0, w: 100, d: 100, points: [
+    { x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+  ] }]);
 }
 
 console.log('# circle / polygon rotation');

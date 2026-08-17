@@ -140,7 +140,12 @@ export function admin() {
     openCategoryForm(category) {
       this.categoryForm = category
         ? { ...category }
-        : { id: null, name: '', sort_order: nextSortOrder(this.categories) };
+        : {
+            id: null,
+            name: '',
+            sort_order: nextSortOrder(this.categories),
+            default_color: PALETTE[0].hex
+          };
     },
 
     async saveCategory() {
@@ -148,7 +153,11 @@ export function admin() {
       this.errorMessage = '';
       try {
         const form = this.categoryForm;
-        const values = { name: form.name.trim(), sort_order: form.sort_order ?? 0 };
+        const values = {
+          name: form.name.trim(),
+          sort_order: form.sort_order ?? 0,
+          default_color: form.default_color
+        };
 
         if (form.id) await updateCategory(form.id, values);
         else await createCategory(values);
@@ -301,6 +310,21 @@ export function admin() {
       return (fallback ?? this.categories[0])?.id ?? null;
     },
 
+    /** カテゴリの既定色。未設定・不明なら null。 */
+    categoryDefaultColor(categoryId) {
+      return this.categories.find((category) => category.id === categoryId)?.default_color ?? null;
+    },
+
+    /**
+     * カテゴリを選び直したら識別カラーを既定色へ差し替える。
+     * 現場ではカテゴリごとに色を揃えて使うため、手で選んだ色より既定色を優先する。
+     * 別の色にしたいときは、この直後にパレットで選び直せる。
+     */
+    applyCategoryColor(categoryId) {
+      const color = this.categoryDefaultColor(categoryId);
+      if (color) this.equipmentForm.color = color;
+    },
+
     /** ↑↓ボタンで1つ入れ替える。タッチ環境ではこちらが唯一の並び替え手段になる。 */
     async moveTemplate(item, direction) {
       const index = this.templates.findIndex((template) => template.id === item.id);
@@ -323,7 +347,8 @@ export function admin() {
             depth_mm: 400,
             height_mm: 500,
             weight_kg: 0,
-            color: PALETTE[0].hex,
+            // 開いた直後からカテゴリと色が一致するよう、既定カテゴリの色から始める。
+            color: this.categoryDefaultColor(this.defaultCategoryId) ?? PALETTE[0].hex,
             shape: null
           };
     },

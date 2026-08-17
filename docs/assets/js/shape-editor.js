@@ -8,13 +8,23 @@ const NORMAL_GRID_MM = 100;
 const FINE_GRID_MM = 10;
 const MIN_SIZE_MM = 1;
 const MAX_SIZE_MM = 20000;
-const MIN_CANVAS_MM = 2500;
 const CANVAS_MARGIN_MM = 300;
-// プレビューのviewBoxはmm単位なので、ハンドルと番号の寸法もmmで持つ。
-const VERTEX_HANDLE_MM = 28;
-const VERTEX_LABEL_OFFSET_MM = 95;
-const VERTEX_LABEL_SIZE_MM = 140;
+// プレビューは aspect-[2/1]。x（横＝奥行）の見える範囲を段で持ち、y（縦＝幅）をその半分にすると
+// viewBox が枠にぴったり収まる。段を持たせているのは、拡大縮小を刻みで扱えるようにするため。
+const ZOOM_LEVELS_MM = [500, 1000, 2000, 4000, 8000, 16000, 20000];
+const DEFAULT_ZOOM_INDEX = 2;   // 2000mm × 1000mm
+// ズームしても画面上の大きさが変わらないよう、装飾はviewBoxの幅からの比で出す。
+// 分母は 2500mm ビューで調整した値（ハンドル28mm / 番号140mm など）から逆算してある。
+const DECOR_RATIO = {
+  handle: 90,       // 頂点ハンドルの半径
+  labelOffset: 26,  // 番号を頂点からずらす量
+  labelSize: 18,    // 番号のフォントサイズ
+  stroke: 250,      // ハンドルや下書きの線幅
+  partStroke: 312,  // パーツの輪郭の線幅
+  labelEdge: 104    // 番号の白フチ
+};
 const ACTIVE_INK = '#111827';
+const INSERT_INK = '#0f766e';
 
 // 画面ではCADと同じく横軸をx・縦軸をyと呼ぶ。プレビューは横が奥行・縦が幅なので、
 // 保存形式（x=幅 / y=奥行）とは名前が入れ替わる。読み替えはこの3つの表だけに閉じ込め、
@@ -184,8 +194,11 @@ export function shapeEditor(form) {
     // 角落としを独立したkindにせず、4隅の編集状態から凸多角形へ置き換える。
     // 保存形式のkindを増やさず、判定と描画を既存のpolygon経路に揃えるため。
     chamfers: [0, 0, 0, 0],
-    canvasWidth: MIN_CANVAS_MM,
-    canvasDepth: MIN_CANVAS_MM,
+    canvasWidth: ZOOM_LEVELS_MM[DEFAULT_ZOOM_INDEX] / 2,
+    canvasDepth: ZOOM_LEVELS_MM[DEFAULT_ZOOM_INDEX],
+    // ユーザーが選んだズーム段。canvasWidth/Depth とは別に持つ。編集のたびに走る
+    // refreshExtents() で毎回上書きされると、選んだ倍率が巻き戻ってしまうため。
+    zoomIndex: DEFAULT_ZOOM_INDEX,
     // 入力欄にフォーカス中の頂点 { part, vertex }。プレビュー側で黒く塗って対応を示す。
     activeVertex: null,
     rectColumns: RECT_COLUMNS,
@@ -221,6 +234,67 @@ export function shapeEditor(form) {
       return `0 0 ${this.canvasDepth} ${this.canvasWidth}`;
     },
 
+    /**
+     * ハンドル・番号・線幅のmm寸法。viewBoxの幅に比例させることで、
+     * どの倍率でも画面上ではほぼ同じ大きさに見せる。
+     */
+    get decor() {
+      const base = this.canvasDepth;
+      return {
+        handle: base / DECOR_RATIO.handle,
+        labelOffset: base / DECOR_RATIO.labelOffset,
+        labelSize: base / DECOR_RATIO.labelSize,
+        stroke: base / DECOR_RATIO.stroke,
+        partStroke: base / DECOR_RATIO.partStroke,
+        labelEdge: base / DECOR_RATIO.labelEdge
+      };
+    },
+
+    /** 見た目のグリッド刻み。吸着は従来どおり100mm（Shiftで10mm）で変えない。 */
+    get gridStepMm() {
+      const level = ZOOM_LEVELS_MM[this.zoomIndex];
+      return level <= 2000 ? NORMAL_GRID_MM : level <= 8000 ? 500 : 1000;
+    },
+
+    get gridPath() {
+      const step = this.gridStepMm;
+      return `M ${step} 0 L 0 0 0 ${step}`;
+    },
+
+    /** いまの形が収まる最小の段。＋の可否と refreshExtents で共用する。 */
+    get fitZoomIndex() {
+      const bounds = this.bounds;
+      const needX = bounds.y + bounds.d + CANVAS_MARGIN_MM;
+      const needY = bounds.x + bounds.w + CANVAS_MARGIN_MM;
+      const index = ZOOM_LEVELS_MM.findIndex((mm) => mm >= needX && mm / 2 >= needY);
+      return index === -1 ? ZOOM_LEVELS_MM.length - 1 : index;
+    },
+
+    // 形がはみ出す拡大はさせない。見えていない頂点は掴めず、パンの仕組みも無いため。
+    get canZoomIn() {
+      return this.zoomIndex > this.fitZoomIndex;
+    },
+
+    get canZoomOut() {
+      return this.zoomIndex < ZOOM_LEVELS_MM.length - 1;
+    },
+
+    get zoomLabel() {
+      return `${ZOOM_LEVELS_MM[this.zoomIndex]}mm`;
+    },
+
+    zoomIn() {
+      if (!this.canZoomIn) return;
+      this.zoomIndex -= 1;
+      this.refreshExtents();
+    },
+
+    zoomOut() {
+      if (!this.canZoomOut) return;
+      this.zoomIndex += 1;
+      this.refreshExtents();
+    },
+
     get previewSize() {
       return `${this.bounds.w} × ${this.bounds.d} mm`;
     },
@@ -234,6 +308,7 @@ export function shapeEditor(form) {
      * renderer.jsと同様にSVGマークアップを文字列で組み立てる。
      */
     get partsMarkup() {
+      const decor = this.decor;
       return this.parts.map((part, index) => {
         const selected = this.selectedIndex === index;
         const attrs = [
@@ -241,7 +316,7 @@ export function shapeEditor(form) {
           `fill="${selected ? '#93c5fd' : '#cbd5e1'}"`,
           'fill-opacity="0.8"',
           `stroke="${selected ? '#1d4ed8' : '#475569'}"`,
-          'stroke-width="8"'
+          `stroke-width="${decor.partStroke}"`
         ].join(' ');
         let shape = '';
 
@@ -255,20 +330,33 @@ export function shapeEditor(form) {
           }).join(' ');
           shape = `<polygon ${attrs} points="${points}"/>`;
           if (selected) {
+            // 辺の中点の「＋」を先に描く。頂点ハンドルと重なったときは、後から描く
+            // 頂点ハンドルのほうが上に来て、掴む操作を邪魔しない。
+            shape += part.points.map((point, edge) => {
+              const next = part.points[(edge + 1) % part.points.length];
+              const view = viewPoint({ x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }, this.canvasWidth);
+              const arm = decor.handle * 0.55;
+              return `<g data-part-index="${index}" data-insert-index="${edge}" style="cursor:copy">` +
+                `<circle cx="${view.x}" cy="${view.y}" r="${decor.handle * 0.85}"` +
+                ` fill="#fff" fill-opacity="0.9" stroke="${INSERT_INK}" stroke-width="${decor.stroke}"/>` +
+                `<path d="M ${view.x - arm} ${view.y} H ${view.x + arm} M ${view.x} ${view.y - arm} V ${view.y + arm}"` +
+                ` stroke="${INSERT_INK}" stroke-width="${decor.stroke}" stroke-linecap="round" pointer-events="none"/>` +
+                '</g>';
+            }).join('');
             shape += part.points.map((point, vertex) => {
               const view = viewPoint(point, this.canvasWidth);
               // 入力欄の行と見比べられるよう、頂点には番号を添え、編集中の1点だけ黒く塗る。
               const active = this.activeVertex?.part === index && this.activeVertex?.vertex === vertex;
               const handle = `<circle data-part-index="${index}" data-vertex-index="${vertex}"` +
-                ` cx="${view.x}" cy="${view.y}" r="${VERTEX_HANDLE_MM}"` +
+                ` cx="${view.x}" cy="${view.y}" r="${decor.handle}"` +
                 ` fill="${active ? ACTIVE_INK : '#fff'}"` +
-                ` stroke="${active ? ACTIVE_INK : '#1d4ed8'}" stroke-width="10"/>`;
+                ` stroke="${active ? ACTIVE_INK : '#1d4ed8'}" stroke-width="${decor.stroke}"/>`;
               // 番号はドラッグの当たり判定を奪わないよう pointer-events を切る。
               // 形の塗りに埋もれないよう白フチ（paint-order）を付ける。
-              const label = `<text x="${view.x + VERTEX_LABEL_OFFSET_MM}" y="${view.y - VERTEX_LABEL_OFFSET_MM}"` +
-                ` font-size="${VERTEX_LABEL_SIZE_MM}" font-weight="${active ? '700' : '500'}"` +
+              const label = `<text x="${view.x + decor.labelOffset}" y="${view.y - decor.labelOffset}"` +
+                ` font-size="${decor.labelSize}" font-weight="${active ? '700' : '500'}"` +
                 ` fill="${active ? ACTIVE_INK : '#1d4ed8'}" paint-order="stroke"` +
-                ' stroke="#fff" stroke-width="24" stroke-linejoin="round"' +
+                ` stroke="#fff" stroke-width="${decor.labelEdge}" stroke-linejoin="round"` +
                 ` text-anchor="middle" dominant-baseline="middle" pointer-events="none">${vertex + 1}</text>`;
               return handle + label;
             }).join('');
@@ -286,8 +374,8 @@ export function shapeEditor(form) {
             shape += corners.map((point, corner) => {
               const view = viewPoint(point, this.canvasWidth);
               return `<circle data-part-index="${index}" data-chamfer-corner="${corner}"` +
-                ` cx="${view.x}" cy="${view.y}" r="${VERTEX_HANDLE_MM}" fill="#fff"` +
-                ' stroke="#7c3aed" stroke-width="10"/>';
+                ` cx="${view.x}" cy="${view.y}" r="${decor.handle}" fill="#fff"` +
+                ` stroke="#7c3aed" stroke-width="${decor.stroke}"/>`;
             }).join('');
           }
         }
@@ -296,18 +384,21 @@ export function shapeEditor(form) {
     },
 
     get draftMarkup() {
+      const decor = this.decor;
+      // 破線の刻みもズームで変わらないよう、線幅と同じ比で出す。
+      const dash = `stroke-dasharray="${decor.stroke * 3} ${decor.stroke * 2}"`;
       if (this.draft) {
         const part = this.draft;
         if (part.kind === 'circle') {
           const center = viewPoint({ x: part.cx, y: part.cy }, this.canvasWidth);
           return `<circle cx="${center.x}" cy="${center.y}" r="${part.r}"` +
             ' fill="#bfdbfe" fill-opacity=".6" stroke="#2563eb"' +
-            ' stroke-width="8" stroke-dasharray="30 20"/>';
+            ` stroke-width="${decor.partStroke}" ${dash}/>`;
         }
         const box = viewRect(part, this.canvasWidth);
         return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"` +
           ' fill="#bfdbfe" fill-opacity=".6" stroke="#2563eb"' +
-          ' stroke-width="8" stroke-dasharray="30 20"/>';
+          ` stroke-width="${decor.partStroke}" ${dash}/>`;
       }
 
       if (this.polygonDraft.length) {
@@ -320,7 +411,7 @@ export function shapeEditor(form) {
           return `${view.x},${view.y}`;
         }).join(' ');
         return `<polyline points="${points}" fill="none" stroke="#2563eb"` +
-          ' stroke-width="10" stroke-dasharray="30 20"/>';
+          ` stroke-width="${decor.stroke}" ${dash}/>`;
       }
       return '';
     },
@@ -333,6 +424,8 @@ export function shapeEditor(form) {
       );
       this.selectedIndex = null;
       this.activeVertex = null;
+      // 前の機材のズームは持ち越さない。開いた直後は常に既定の 2000×1000 から始める。
+      this.zoomIndex = DEFAULT_ZOOM_INDEX;
       this.cancelPolygon();
       this.error = '';
       this.open = true;
@@ -355,16 +448,17 @@ export function shapeEditor(form) {
       this.error = '';
     },
 
+    /**
+     * viewBoxの範囲を決める。ユーザーが選んだ段を尊重しつつ、形がそこに収まらないときだけ広げる。
+     * canvasWidth は y反転の原点（viewPoint / point）も兼ねるので、viewBoxの高さと必ず一致させる。
+     */
     refreshExtents() {
       const bounds = this.bounds;
-      this.canvasWidth = Math.min(
-        MAX_SIZE_MM,
-        Math.max(MIN_CANVAS_MM, bounds.x + bounds.w + CANVAS_MARGIN_MM)
-      );
-      this.canvasDepth = Math.min(
-        MAX_SIZE_MM,
-        Math.max(MIN_CANVAS_MM, bounds.y + bounds.d + CANVAS_MARGIN_MM)
-      );
+      this.zoomIndex = Math.max(this.zoomIndex, this.fitZoomIndex);
+      const level = ZOOM_LEVELS_MM[this.zoomIndex];
+      // 最大段でも入らない極端な形は、はみ出させずに letterbox で受ける。
+      this.canvasDepth = Math.max(level, bounds.y + bounds.d + CANVAS_MARGIN_MM);
+      this.canvasWidth = Math.max(level / 2, bounds.x + bounds.w + CANVAS_MARGIN_MM);
     },
 
     point(event, fine = event.shiftKey) {
@@ -381,6 +475,14 @@ export function shapeEditor(form) {
 
     canvasPointerDown(event) {
       if (event.button !== 0) return;
+
+      // 辺の中点の「＋」。押した時点で頂点を確定させるので、ドラッグ系より先に見る。
+      const insert = event.target.closest?.('[data-insert-index]');
+      if (insert) {
+        event.preventDefault();
+        this.insertVertex(Number(insert.dataset.partIndex), Number(insert.dataset.insertIndex));
+        return;
+      }
 
       const vertex = event.target.closest?.('[data-vertex-index]');
       if (vertex) {
@@ -692,6 +794,83 @@ export function shapeEditor(form) {
 
     blurVertex() {
       this.activeVertex = null;
+    },
+
+    /**
+     * 辺の中点に頂点を1つ足す。中点は両隣と共線だが、isConvex は共線を読み飛ばすので通る。
+     * 同座標の点だけは isConvex が弾くので、潰れた辺の中点はここで落ちる。
+     */
+    insertVertex(index, edge) {
+      const part = this.parts[index];
+      if (part?.kind !== 'polygon') return;
+
+      const a = part.points[edge];
+      const b = part.points[(edge + 1) % part.points.length];
+      const candidate = clone(part);
+      candidate.points.splice(edge + 1, 0, {
+        x: roundMm((a.x + b.x) / 2),
+        y: roundMm((a.y + b.y) / 2)
+      });
+      if (!isConvex(candidate.points)) {
+        this.error = 'この辺は短すぎて頂点を追加できません。';
+        return;
+      }
+
+      this.parts[index] = candidate;
+      this.selectedIndex = index;
+      // 追加した点をそのまま黒く示し、どれが増えたのか分かるようにする。
+      this.activeVertex = { part: index, vertex: edge + 1 };
+      this.error = '';
+      this.syncForm();
+    },
+
+    /** 頂点を1つ減らす。3点未満の多角形は保存できないのでUI側で先に止める。 */
+    removeVertex(index, vertex) {
+      const part = this.parts[index];
+      if (part?.kind !== 'polygon') return;
+      if (part.points.length <= 3) {
+        this.error = '多角形の頂点は3点以上必要です。';
+        return;
+      }
+
+      const candidate = clone(part);
+      candidate.points.splice(vertex, 1);
+      if (!isConvex(candidate.points)) {
+        this.error = '凸形状を保てないため、この頂点は削除できません。';
+        return;
+      }
+
+      this.parts[index] = candidate;
+      this.activeVertex = null;
+      this.error = '';
+      this.syncForm();
+    },
+
+    /**
+     * 選択中のパーツだけを90度回す。軸はそのパーツの外形中心なので、回してもその場に留まる。
+     * 向きは geometry.js の toParts() と同じ（局所座標で {x: d0 - y, y: x}）にして、
+     * 荷台上で機材を回したときと食い違わないようにする。
+     * 回転で他のパーツと重なっても止めない。重なりの検査は「形を反映」でまとめて行う。
+     */
+    rotatePart(index = this.selectedIndex) {
+      const part = index === null ? null : this.parts[index];
+      const box = part ? normalizedPart(part) : null;
+      if (!box || part.kind === 'circle') return;
+
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.d / 2;
+      const map = (point) => ({
+        x: roundMm(cx + box.d / 2 - (point.y - box.y)),
+        y: roundMm(cy - box.w / 2 + (point.x - box.x))
+      });
+
+      this.parts[index] = part.kind === 'polygon'
+        ? { kind: 'polygon', points: part.points.map(map) }
+        // 矩形は外形そのものなので、幅と奥行を入れ替えて中心を合わせ直すだけでよい。
+        : { kind: 'rect', x: roundMm(cx - box.d / 2), y: roundMm(cy - box.w / 2), w: box.d, d: box.w };
+      this.chamfers = [0, 0, 0, 0];
+      this.error = '';
+      this.syncForm();
     },
 
     updatePoint(index, vertex, field, value) {
