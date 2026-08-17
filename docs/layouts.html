@@ -50,7 +50,7 @@
           <th class="text-left px-3 py-2">名前</th>
           <!-- 自分の表では常に自分の名前になるが、列を揃えるために出す。 -->
           <th class="text-left px-3 py-2 w-32">作成者</th>
-          <th class="text-left px-3 py-2 w-40">トラック</th>
+          <th class="text-left px-3 py-2 w-56">トラック</th>
           <th class="text-left px-3 py-2 w-36">更新日時</th>
           <th class="px-3 py-2 w-32"></th>
         </tr>
@@ -64,7 +64,7 @@
               <span class="block text-[10px] text-gray-400" x-text="layout.note"></span>
             </td>
             <td class="px-3 py-2 text-gray-600" x-text="ownerName(layout)"></td>
-            <td class="px-3 py-2 text-gray-600" x-text="layout.truckNames"></td>
+            <td class="px-3 py-2 text-gray-600 truncate" :title="layout.truckNames" x-text="layout.truckNames"></td>
             <td class="px-3 py-2 text-gray-500 tabular-nums" x-text="formatDate(layout.updated_at)"></td>
             <td class="px-3 py-2 text-right whitespace-nowrap">
               <button type="button" class="text-blue-600 hover:underline disabled:opacity-30"
@@ -87,7 +87,7 @@
         <tr>
           <th class="text-left px-3 py-2">名前</th>
           <th class="text-left px-3 py-2 w-32">作成者</th>
-          <th class="text-left px-3 py-2 w-40">トラック</th>
+          <th class="text-left px-3 py-2 w-56">トラック</th>
           <th class="text-left px-3 py-2 w-36">更新日時</th>
           <th class="px-3 py-2 w-32"></th>
         </tr>
@@ -101,7 +101,7 @@
               <span class="block text-[10px] text-gray-400" x-text="layout.note"></span>
             </td>
             <td class="px-3 py-2 text-gray-600" x-text="ownerName(layout)"></td>
-            <td class="px-3 py-2 text-gray-600" x-text="layout.truckNames"></td>
+            <td class="px-3 py-2 text-gray-600 truncate" :title="layout.truckNames" x-text="layout.truckNames"></td>
             <td class="px-3 py-2 text-gray-500 tabular-nums" x-text="formatDate(layout.updated_at)"></td>
             <td class="px-3 py-2 text-right whitespace-nowrap">
               <button type="button" class="text-blue-600 hover:underline disabled:opacity-30"
