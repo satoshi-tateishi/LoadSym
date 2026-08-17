@@ -109,7 +109,8 @@ async function getAccessToken() {
   return json.access_token;
 }
 
-export async function uploadJson(filename, jsonText) {
+/** pathは`/`始まりのフルパス（例: `/2026/08/17/231045.json`）。存在しない親フォルダは自動で作られる。 */
+export async function uploadJson(path, jsonText) {
   const accessToken = await getAccessToken();
   const response = await fetch(UPLOAD_URL, {
     method: 'POST',
@@ -117,7 +118,7 @@ export async function uploadJson(filename, jsonText) {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/octet-stream',
       'Dropbox-API-Arg': JSON.stringify({
-        path: `/${filename}`,
+        path,
         mode: 'add',
         autorename: false,
         mute: true
@@ -129,7 +130,11 @@ export async function uploadJson(filename, jsonText) {
   return response.json();
 }
 
-/** App folder直下にあるバックアップJSONの一覧を、新しい順で返す。 */
+/**
+ * App folder内のバックアップJSONを、日付フォルダをまたいで（recursive）新しい順で返す。
+ * パス自体が `/YYYY/MM/DD/HHmmss.json` で固定幅ゼロ埋めのため、path_lower の文字列比較が
+ * そのまま日時順になる。
+ */
 export async function listBackups() {
   const accessToken = await getAccessToken();
   const response = await fetch(LIST_FOLDER_URL, {
@@ -138,13 +143,13 @@ export async function listBackups() {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ path: '' })
+    body: JSON.stringify({ path: '', recursive: true })
   });
   if (!response.ok) throw new Error('Dropboxのバックアップ一覧を取得できませんでした。');
   const json = await response.json();
   return (json.entries ?? [])
     .filter((entry) => entry['.tag'] === 'file' && entry.name.endsWith('.json'))
-    .sort((a, b) => (a.name < b.name ? 1 : -1));
+    .sort((a, b) => (a.path_lower < b.path_lower ? 1 : -1));
 }
 
 export async function downloadJson(path) {

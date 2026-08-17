@@ -45,7 +45,43 @@ export function backupSummary(payload) {
   return counts;
 }
 
-/** ローカル保存・Dropboxアップロードの両方で使うファイル名。 */
-export function backupFilename(createdAtIso) {
-  return `loadsym-backup-${createdAtIso.replace(/[:.]/g, '-')}.json`;
+/**
+ * created_at（UTC ISO文字列）をJST（UTC+9固定。日本にサマータイムはない）の
+ * 年/月/日/時刻に分解する。Dropboxの保存先を日付ごとのフォルダへ分けるのと、
+ * 画面表示もJSTへ揃えるために使う。
+ */
+function jstParts(createdAtIso) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  });
+  const parts = Object.fromEntries(
+    formatter.formatToParts(new Date(createdAtIso)).map((part) => [part.type, part.value])
+  );
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    time: `${parts.hour}${parts.minute}${parts.second}`
+  };
+}
+
+/** Dropboxの保存先パス。`/YYYY/MM/DD/HHmmss.json`（JST）。フォルダはアップロード時に自動で作られる。 */
+export function backupDropboxPath(createdAtIso) {
+  const { year, month, day, time } = jstParts(createdAtIso);
+  return `/${year}/${month}/${day}/${time}.json`;
+}
+
+/** ローカルダウンロード用のファイル名。Dropboxと違いフォルダを持てないため、日付も含める。 */
+export function backupLocalFilename(createdAtIso) {
+  const { year, month, day, time } = jstParts(createdAtIso);
+  return `loadsym-backup-${year}${month}${day}-${time}.json`;
+}
+
+/** 画面表示用（JST）。 */
+export function formatJst(createdAtIso) {
+  const { year, month, day, time } = jstParts(createdAtIso);
+  return `${year}-${month}-${day} ${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)} JST`;
 }

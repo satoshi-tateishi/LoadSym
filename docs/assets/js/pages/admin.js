@@ -15,7 +15,10 @@ import {
   updateEquipmentOrder
 } from '../equipments.js';
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
-import { exportBackup, restoreBackup, backupSummary, backupFilename } from '../backup.js';
+import {
+  exportBackup, restoreBackup, backupSummary,
+  backupDropboxPath, backupLocalFilename, formatJst
+} from '../backup.js';
 import {
   connect as dropboxConnect, isConnected as dropboxIsConnected,
   uploadJson as dropboxUpload, listBackups as dropboxListBackups,
@@ -452,10 +455,11 @@ export function admin() {
       this.noticeMessage = '';
       await withSaving(this, async () => {
         const payload = await exportBackup();
-        const filename = backupFilename(payload.created_at);
-        await dropboxUpload(filename, JSON.stringify(payload));
-        this.lastBackup = { filename, createdAt: payload.created_at, payload };
-        this.noticeMessage = `バックアップ「${filename}」をDropboxへ保存しました。`;
+        const path = backupDropboxPath(payload.created_at);
+        await dropboxUpload(path, JSON.stringify(payload));
+        const createdAtJst = formatJst(payload.created_at);
+        this.lastBackup = { path, createdAt: payload.created_at, createdAtJst, payload };
+        this.noticeMessage = `バックアップ（${createdAtJst}）をDropbox「${path}」へ保存しました。`;
         await this.refreshBackupList();
       });
     },
@@ -467,7 +471,7 @@ export function admin() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = this.lastBackup.filename;
+      anchor.download = backupLocalFilename(this.lastBackup.createdAt);
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -476,7 +480,12 @@ export function admin() {
 
     async refreshBackupList() {
       await withSaving(this, async () => {
-        this.backupList = await dropboxListBackups();
+        const entries = await dropboxListBackups();
+        this.backupList = entries.map((entry) => ({
+          ...entry,
+          displayPath: entry.path_display ?? entry.name,
+          displayModified: formatJst(entry.client_modified)
+        }));
       });
     },
 
@@ -510,7 +519,7 @@ export function admin() {
       }
       this.errorMessage = '';
       this.restoreConfirmText = '';
-      this.restorePreview = { payload, summary: backupSummary(payload) };
+      this.restorePreview = { payload, summary: backupSummary(payload), createdAtJst: formatJst(payload.created_at) };
     },
 
     /** 全テーブルを丸ごと洗い替える復元。取り消せないため、確認テキストの入力を必須にしてある。 */

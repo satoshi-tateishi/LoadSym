@@ -310,8 +310,8 @@
 
           <div x-show="lastBackup" class="border-t pt-3">
             <p>
-              直近のバックアップ: <span x-text="lastBackup?.filename"></span>
-              （<span x-text="lastBackup?.createdAt"></span>）をDropboxへ保存しました。
+              直近のバックアップ: Dropbox「<span x-text="lastBackup?.path"></span>」に保存しました
+              （<span x-text="lastBackup?.createdAtJst"></span>）。
             </p>
             <button type="button" class="mt-1 px-2 py-1 border rounded" @click="downloadLastBackup()">
               ローカルにもダウンロード
@@ -327,7 +327,7 @@
             <table x-show="backupList.length" class="w-full bg-white border rounded text-xs">
               <thead class="bg-gray-50 text-gray-500">
                 <tr>
-                  <th class="text-left px-2 py-2">ファイル名</th>
+                  <th class="text-left px-2 py-2">パス</th>
                   <th class="text-left px-2 py-2">更新日時</th>
                   <th class="px-2 py-2"></th>
                 </tr>
@@ -335,8 +335,8 @@
               <tbody>
                 <template x-for="entry in backupList" :key="entry.id">
                   <tr class="border-t">
-                    <td class="px-2 py-1" x-text="entry.name"></td>
-                    <td class="px-2 py-1" x-text="entry.client_modified"></td>
+                    <td class="px-2 py-1" x-text="entry.displayPath"></td>
+                    <td class="px-2 py-1" x-text="entry.displayModified"></td>
                     <td class="px-2 py-1 text-right">
                       <button type="button" class="px-2 py-1 border rounded" :disabled="saving"
                               @click="selectBackupFromDropbox(entry)">この内容で復元</button>
@@ -363,7 +363,7 @@
       <div class="bg-white rounded p-4 w-full max-w-md text-xs space-y-3">
         <p class="font-bold text-red-600">本当にこのバックアップで復元しますか？</p>
         <p>
-          作成日時: <span x-text="restorePreview.payload.created_at"></span><br>
+          作成日時: <span x-text="restorePreview.createdAtJst"></span><br>
           現在のデータはすべて削除され、以下の件数で置き換わります。この操作は元に戻せません。
         </p>
         <ul class="grid grid-cols-2 gap-x-3 gap-y-1 bg-gray-50 border rounded p-2">
