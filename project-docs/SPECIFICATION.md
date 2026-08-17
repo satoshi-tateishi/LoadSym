@@ -25,7 +25,7 @@
     - Supabase 無料プランの自動停止を防ぐため、GitHub Actions で日次の keepalive リクエストを送る。
 - **フロントエンド技術**:
     - 素の ES Modules（アプリコードはバンドルしない）、MPA（1 HTML = 1 画面）、ページ遷移は `window.location.href`。
-    - Alpine.js（UI 状態）、htmx（共通ヘッダーの読み込みのみ）。外部 CDN は**バージョン固定＋SRI＋crossorigin**。
+    - Alpine.js（UI 状態）、htmx（共通ヘッダーと機材フォームのHTMLパーシャル読み込み）。外部 CDN は**バージョン固定＋SRI＋crossorigin**。
     - Tailwind CSS v3（`npm run build:css` で生成、生成物をコミット）。
     - `@supabase/supabase-js` は esbuild で単一 ESM ファイルにバンドルし、`docs/assets/vendor/` に自己ホストする（ESM の import に SRI を付けられず CDN 依存を避けられないため）。
     - 荷台図の描画は **SVG**（Canvas ではない）。機材1個 = 1 `<g>` として DOM イベントを利用でき、機材名テキストがそのまま印刷・PNG 出力に乗るため。
@@ -78,7 +78,8 @@
 | レイアウト一覧 | `docs/layouts.html` | 保存済みレイアウトの一覧 |
 | 管理 | `docs/admin.html` | Admin 専用。ユーザー管理 / テンプレート管理 / CSV インポート |
 
-共通ヘッダーは `docs/partials/nav.html` を htmx で各ページに読み込む。
+共通ヘッダーは `docs/partials/nav.html`、シミュレーターと管理画面で共有する機材フォームは
+`docs/partials/equipment-form.html` を htmx で各ページに読み込む。
 
 ### 4.1 シミュレーター画面
 

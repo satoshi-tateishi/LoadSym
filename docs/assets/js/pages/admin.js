@@ -4,7 +4,7 @@
 // 実際の権限はすべてRLSとRPC内のチェックが担保している。
 
 import { initAuthenticatedPage } from '../layout.js';
-import { translateError } from '../error-messages.js';
+import { translateError, withSaving } from '../error-messages.js';
 import { listUsers, updateUser } from '../admin-users.js';
 import {
   listCategories, createCategory, updateCategory, deleteCategory, countEquipmentsByCategory,
@@ -17,6 +17,9 @@ import {
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
 import { PALETTE, PALETTE_SHADES, paletteToCsv } from '../palette.js';
 import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
+import {
+  defaultCategoryIdOf, categoryDefaultColorOf, emptyEquipmentDraft, buildEquipmentValues
+} from '../equipment-form.js';
 
 // 機材フォーム内の共有Alpineコンポーネントから参照する。
 window.shapeEditor = shapeEditor;
@@ -26,6 +29,15 @@ window.shapeEditor = shapeEditor;
 // 画面幅だけで判定すると横向きiPadのような広いタッチ端末も含んでしまうので、
 // hover/pointer でマウス・トラックパッド操作かどうかも合わせて見る。
 const DESKTOP_QUERY = '(min-width: 768px) and (hover: hover) and (pointer: fine)';
+
+function swapAdjacent(items, item, direction) {
+  const index = items.findIndex((candidate) => candidate.id === item.id);
+  const target = index + direction;
+  if (target < 0 || target >= items.length) return null;
+  const reordered = [...items];
+  [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+  return reordered;
+}
 
 export function admin() {
   return {
@@ -46,6 +58,13 @@ export function admin() {
     categoryForm: null,
     equipmentForm: null,
     importPreview: null,
+
+    equipmentFormLabel: 'テンプレート機材',
+    showTemplateOwnershipControl: false,
+
+    get categoryManagementHint() {
+      return '';
+    },
 
     isDesktop: false,
     /** 並び替え可能なリストごとのSortableインスタンス。 */
@@ -114,21 +133,15 @@ export function admin() {
     },
 
     async applyUserChange(user, values) {
-      this.saving = true;
-      this.errorMessage = '';
       this.noticeMessage = '';
-      try {
+      await withSaving(this, async () => {
         await updateUser(user.id, values);
         this.users = await listUsers();
         this.noticeMessage = `${user.email} を更新しました。`;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
+      }, {
         // 失敗したときに画面の見た目だけ変わったままにならないよう、必ず取り直す。
-        this.users = await listUsers();
-      } finally {
-        this.saving = false;
-      }
+        onError: async () => { this.users = await listUsers(); }
+      });
     },
 
     // ---------------- カテゴリ管理 ----------------
@@ -149,9 +162,7 @@ export function admin() {
     },
 
     async saveCategory() {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         const form = this.categoryForm;
         const values = {
           name: form.name.trim(),
@@ -165,12 +176,7 @@ export function admin() {
         await this.reload();
         this.categoryForm = null;
         this.noticeMessage = 'カテゴリを保存しました。';
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     async removeCategory() {
@@ -181,19 +187,12 @@ export function admin() {
       }
       if (!window.confirm(`カテゴリ「${this.categoryForm.name}」を削除しますか？`)) return;
 
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         await deleteCategory(this.categoryForm.id);
         await this.reload();
         this.categoryForm = null;
         this.noticeMessage = 'カテゴリを削除しました。';
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     /**
@@ -201,12 +200,8 @@ export function admin() {
      * 表示中の並びをそのまま採番し直すので、ドラッグ並び替えと結果が揃う。
      */
     async moveCategory(category, direction) {
-      const index = this.categories.findIndex((item) => item.id === category.id);
-      const target = index + direction;
-      if (target < 0 || target >= this.categories.length) return;
-
-      const reordered = [...this.categories];
-      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      const reordered = swapAdjacent(this.categories, category, direction);
+      if (!reordered) return;
       await this.persistCategoryOrder(reordered);
     },
 
@@ -289,30 +284,21 @@ export function admin() {
 
     /** 画面の並びを確定してDBへ反映する。失敗したらサーバーの状態に戻す。 */
     async saveOrder(save, rollback) {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         await save();
         await this.reload();
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-        rollback();
-      } finally {
-        this.saving = false;
-      }
+      }, { onError: rollback });
     },
 
     // ---------------- テンプレート機材 ----------------
 
     get defaultCategoryId() {
-      const fallback = this.categories.find((category) => category.name === 'その他');
-      return (fallback ?? this.categories[0])?.id ?? null;
+      return defaultCategoryIdOf(this.categories);
     },
 
     /** カテゴリの既定色。未設定・不明なら null。 */
     categoryDefaultColor(categoryId) {
-      return this.categories.find((category) => category.id === categoryId)?.default_color ?? null;
+      return categoryDefaultColorOf(this.categories, categoryId);
     },
 
     /**
@@ -327,48 +313,26 @@ export function admin() {
 
     /** ↑↓ボタンで1つ入れ替える。タッチ環境ではこちらが唯一の並び替え手段になる。 */
     async moveTemplate(item, direction) {
-      const index = this.templates.findIndex((template) => template.id === item.id);
-      const target = index + direction;
-      if (target < 0 || target >= this.templates.length) return;
-
-      const reordered = [...this.templates];
-      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      const reordered = swapAdjacent(this.templates, item, direction);
+      if (!reordered) return;
       await this.persistTemplateOrder(reordered);
     },
 
     openEquipmentForm(item) {
       this.equipmentForm = item
         ? { ...item, shape: item.shape ? JSON.parse(JSON.stringify(item.shape)) : null }
-        : {
-            id: null,
-            name: '',
-            category_id: this.defaultCategoryId,
-            width_mm: 600,
-            depth_mm: 400,
-            height_mm: 500,
-            weight_kg: 0,
-            // 開いた直後からカテゴリと色が一致するよう、既定カテゴリの色から始める。
-            color: this.categoryDefaultColor(this.defaultCategoryId) ?? PALETTE[0].hex,
-            shape: null
-          };
+        // 開いた直後からカテゴリと色が一致するよう、既定カテゴリの色から始める。
+        : emptyEquipmentDraft(
+            this.defaultCategoryId,
+            this.categoryDefaultColor(this.defaultCategoryId) ?? PALETTE[0].hex
+          );
     },
 
     async saveEquipment() {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         const form = this.equipmentForm;
         prepareEquipmentShape(form);
-        const values = {
-          name: form.name,
-          category_id: form.category_id || this.defaultCategoryId,
-          width_mm: form.width_mm,
-          depth_mm: form.depth_mm,
-          height_mm: form.height_mm,
-          weight_kg: form.weight_kg ?? 0,
-          color: form.color,
-          shape: form.shape
-        };
+        const values = buildEquipmentValues(form, this.defaultCategoryId);
 
         // 管理画面から作るものは常に共通テンプレート（user_id = null）。
         if (form.id) await updateEquipment(form.id, values);
@@ -377,28 +341,16 @@ export function admin() {
         await this.reload();
         this.equipmentForm = null;
         this.noticeMessage = 'テンプレート機材を保存しました。';
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     async removeEquipment() {
       if (!window.confirm(`「${this.equipmentForm.name}」を削除しますか？`)) return;
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         await deleteEquipment(this.equipmentForm.id);
         await this.reload();
         this.equipmentForm = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     // ---------------- CSVインポート ----------------
@@ -455,20 +407,13 @@ export function admin() {
       const rows = this.importPreview.items.filter((item) => !item.fatal).map((item) => item.values);
       if (rows.length === 0) return;
 
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         // 管理画面からの取り込みは共通テンプレートとして登録する。
         await createEquipments(rows, null);
         await this.reload();
         this.noticeMessage = `${rows.length} 件のテンプレート機材を取り込みました。`;
         this.importPreview = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     }
   };
 }

@@ -6,7 +6,7 @@
 
 import { initAuthenticatedPage } from '../layout.js';
 import { canEdit } from '../auth.js';
-import { translateError } from '../error-messages.js';
+import { translateError, withSaving } from '../error-messages.js';
 import { listLayouts, listOwnerNames, deleteLayout, renameLayout, loadLayout, saveLayout, toSlots }
   from '../layouts.js';
 
@@ -94,35 +94,21 @@ export function layoutList() {
     },
 
     async saveRename() {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         await renameLayout(this.renameForm.id, this.renameForm.name, this.renameForm.note || null);
         await this.reload();
         this.renameForm = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     async remove(layout) {
       if (!window.confirm(`「${layout.name}」を削除しますか？この操作は元に戻せません。`)) return;
 
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         await deleteLayout(layout.id);
         await this.reload();
         this.noticeMessage = '削除しました。';
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     /**
@@ -131,21 +117,14 @@ export function layoutList() {
      * 変更・削除されていても図はそのまま残る。
      */
     async duplicate(layout) {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         const row = await loadLayout(layout.id);
         const name = `${row.name} のコピー`;
         const id = await saveLayout({ name, note: row.note, slots: toSlots(row) }, this.session.user.id);
         await this.reload();
         this.noticeMessage = `「${name}」として複製しました。`;
         window.location.href = `./simulator.html?layout=${encodeURIComponent(id)}`;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     formatDate(value) {

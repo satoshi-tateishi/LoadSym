@@ -10,7 +10,7 @@
 
 import { initAuthenticatedPage } from '../layout.js';
 import { canEdit, canEditRecord } from '../auth.js';
-import { translateError } from '../error-messages.js';
+import { translateError, withSaving } from '../error-messages.js';
 import { listEquipments, createEquipment, updateEquipment, deleteEquipment } from '../equipments.js';
 import { listCategories } from '../categories.js';
 import { PALETTE, PALETTE_SHADES } from '../palette.js';
@@ -29,6 +29,9 @@ import {
 } from '../renderer.js';
 import { downloadSvgAsPng } from '../export-png.js';
 import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
+import {
+  defaultCategoryIdOf, categoryDefaultColorOf, emptyEquipmentDraft, buildEquipmentValues
+} from '../equipment-form.js';
 
 // 機材フォーム内の共有Alpineコンポーネントから参照する。
 window.shapeEditor = shapeEditor;
@@ -91,6 +94,16 @@ export function simulator() {
     truckForm: null,
     saveDialog: null,
 
+    equipmentFormLabel: '機材',
+
+    get showTemplateOwnershipControl() {
+      return this.isAdmin;
+    },
+
+    get categoryManagementHint() {
+      return this.isAdmin ? 'カテゴリの追加・並び替え・既定色の変更は管理画面で行えます。' : '';
+    },
+
     /** 識別カラーの選択肢。赤はエラー表示に使うためパレットから除外してある。 */
     palette: PALETTE,
     paletteShades: PALETTE_SHADES,
@@ -138,13 +151,12 @@ export function simulator() {
 
     /** 新規登録時の既定カテゴリ。「その他」があればそれ、無ければ先頭。 */
     get defaultCategoryId() {
-      const fallback = this.categories.find((category) => category.name === 'その他');
-      return (fallback ?? this.categories[0])?.id ?? null;
+      return defaultCategoryIdOf(this.categories);
     },
 
     /** カテゴリの既定色。未設定・不明なら null。 */
     categoryDefaultColor(categoryId) {
-      return this.categories.find((category) => category.id === categoryId)?.default_color ?? null;
+      return categoryDefaultColorOf(this.categories, categoryId);
     },
 
     /**
@@ -798,36 +810,20 @@ export function simulator() {
       this.equipmentForm = item
         ? { ...item, shape: item.shape ? JSON.parse(JSON.stringify(item.shape)) : null, asTemplate: item.user_id === null }
         : {
-            id: null,
-            name: '',
-            category_id: this.defaultCategoryId,
-            width_mm: 600,
-            depth_mm: 400,
-            height_mm: 500,
-            weight_kg: 0,
             // 開いた直後からカテゴリと色が一致するよう、既定カテゴリの色から始める。
-            color: this.categoryDefaultColor(this.defaultCategoryId) ?? PALETTE[0].hex,
-            shape: null,
+            ...emptyEquipmentDraft(
+              this.defaultCategoryId,
+              this.categoryDefaultColor(this.defaultCategoryId) ?? PALETTE[0].hex
+            ),
             asTemplate: false
           };
     },
 
     async saveEquipment() {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         const form = this.equipmentForm;
         prepareEquipmentShape(form);
-        const values = {
-          name: form.name,
-          category_id: form.category_id || this.defaultCategoryId,
-          width_mm: form.width_mm,
-          depth_mm: form.depth_mm,
-          height_mm: form.height_mm,
-          weight_kg: form.weight_kg ?? 0,
-          color: form.color,
-          shape: form.shape
-        };
+        const values = buildEquipmentValues(form, this.defaultCategoryId);
 
         if (form.id) {
           await updateEquipment(form.id, this.withOwnerChange(form, values));
@@ -837,27 +833,16 @@ export function simulator() {
 
         await this.reloadMasters();
         this.equipmentForm = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     async removeEquipment() {
       if (!window.confirm('この機材を削除しますか？')) return;
-      this.saving = true;
-      try {
+      await withSaving(this, async () => {
         await deleteEquipment(this.equipmentForm.id);
         await this.reloadMasters();
         this.equipmentForm = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     // ---------------- トラックフォーム ----------------
@@ -886,9 +871,7 @@ export function simulator() {
     },
 
     async saveTruck() {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         const form = this.truckForm;
         const values = {
           name: form.name,
@@ -920,27 +903,16 @@ export function simulator() {
 
         await this.reloadMasters();
         this.truckForm = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     async removeTruck() {
       if (!window.confirm('このトラックを削除しますか？')) return;
-      this.saving = true;
-      try {
+      await withSaving(this, async () => {
         await deleteTruck(this.truckForm.id);
         await this.reloadMasters();
         this.truckForm = null;
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     // ---------------- レイアウトの保存・読み込み ----------------
@@ -950,9 +922,7 @@ export function simulator() {
     },
 
     async saveLayoutNow() {
-      this.saving = true;
-      this.errorMessage = '';
-      try {
+      await withSaving(this, async () => {
         const dialog = this.saveDialog;
         const id = await saveLayout(
           {
@@ -971,12 +941,7 @@ export function simulator() {
         this.layoutOwnerId = this.session.user.id;
         this.saveDialog = null;
         this.notice('保存しました。');
-      } catch (error) {
-        console.error(error);
-        this.errorMessage = translateError(error);
-      } finally {
-        this.saving = false;
-      }
+      });
     },
 
     async openLayout(id) {

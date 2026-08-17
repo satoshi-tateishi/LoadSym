@@ -43,3 +43,24 @@ export function translateError(error) {
 
   return message;
 }
+
+/**
+ * 保存系の非同期処理に共通する saving/errorMessage の状態を管理する。
+ * task 内では noticeMessage など、ページ固有の状態を自由に更新できる。
+ * @param {object} self Alpineコンポーネント（saving / errorMessage を持つ）
+ * @param {() => Promise<void>} task
+ * @param {{onError?: (error: unknown) => Promise<void> | void}} [options]
+ */
+export async function withSaving(self, task, options = {}) {
+  self.saving = true;
+  self.errorMessage = '';
+  try {
+    await task();
+  } catch (error) {
+    console.error(error);
+    self.errorMessage = translateError(error);
+    await options.onError?.(error);
+  } finally {
+    self.saving = false;
+  }
+}
