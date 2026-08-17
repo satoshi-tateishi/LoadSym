@@ -178,12 +178,14 @@ export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = D
 /**
  * 指定したトラック内の全機材を、荷台の左前から詰め直す。
  *
- * 最初の版では向きを勝手に変えず、現在の rotation を保つ。奥行きの大きい機材から
- * 順に既存の空き探索へ通すことで、同程度の奥行きが近くに並ぶ単純で決定的な結果にする。
+ * 向きを勝手に変えず、現在の rotation を保つ。同一機材を小さなブロックにまとめてから
+ * 既存の空き探索へ通すことで、人手で積むときに近いまとまりを作る。
+ * 同一機材が5台以上あり、1台を除外すると使用奥行きが大きく縮む場合は、その1台を
+ * 縦積み候補として床面計算から外す（2D上では後方へ退避し、実際には重ねない）。
  * 1点でも置けない、または最終検証で不正が残る場合は途中結果を破棄する。
  *
  * DOM・履歴・通知には触れず、入力の slot / placements も変更しない。
- * @returns {{placements:Array, status:'arranged'|'unchanged'|'failed', unplacedIds:Array<string>}}
+ * @returns {{placements:Array, status:'arranged'|'unchanged'|'failed', unplacedIds:Array<string>, stackSuggestion?:object}}
  */
 export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const originals = slot?.placements ?? [];
@@ -191,46 +193,340 @@ export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
     return { placements: originals, status: 'unchanged', unplacedIds: [] };
   }
 
-  const ordered = originals
-    .map((placement, index) => {
-      const bounds = boundsOf(toParts(placement));
-      return { placement, index, width: bounds.w, depth: bounds.d };
-    })
-    .sort((a, b) => b.depth - a.depth || b.width - a.width || a.index - b.index);
-
   const bed = bedOf(slot);
   const obstacles = obstacleShapes(slot);
-  const arrangedById = new Map();
-  const occupied = [];
-
-  for (const { placement } of ordered) {
-    const origin = { ...placement, x: 0, y: 0 };
-    const free = findFreeSpot(toParts(origin), occupied, bed, obstacles, clearanceMm);
-    if (!free) {
-      return { placements: originals, status: 'failed', unplacedIds: [placement.id] };
-    }
-
-    const arranged = { ...placement, x: free.x, y: free.y };
-    arrangedById.set(placement.id, arranged);
-    occupied.push(toShape(arranged));
+  const recalculated = arrangeFloor(originals, bed, obstacles, clearanceMm);
+  if (!recalculated) {
+    return {
+      placements: originals,
+      status: 'failed',
+      unplacedIds: originals.map((placement) => placement.id)
+    };
   }
 
-  const invalid = findInvalidShapes(occupied, bed, obstacles, clearanceMm);
-  if (invalid.size > 0) {
-    return { placements: originals, status: 'failed', unplacedIds: [...invalid] };
-  }
+  // 既存データが正常かつ再計算より短い場合は、それ自体を最良候補として扱う。
+  // 人手で作った理想型を自動配置で悪化させず、以後の試行錯誤の基準にもできる。
+  const existingIsValid = findInvalidShapes(
+    originals.map(toShape), bed, obstacles, clearanceMm
+  ).size === 0;
+  const normal = existingIsValid && usedDepth(originals) <= usedDepth(recalculated)
+    ? originals
+    : recalculated;
 
-  const placements = originals.map((placement) => arrangedById.get(placement.id));
+  const suggested = findStackSuggestion(
+    originals, normal, bed, obstacles, clearanceMm
+  );
+  const placements = suggested?.placements ?? normal;
+
   const unchanged = placements.every((placement, index) =>
     placement.x === originals[index].x &&
     placement.y === originals[index].y &&
     placement.rotation === originals[index].rotation
   );
 
-  return {
+  const result = {
     placements: unchanged ? originals : placements,
     status: unchanged ? 'unchanged' : 'arranged',
     unplacedIds: []
+  };
+  if (suggested) result.stackSuggestion = suggested.stackSuggestion;
+  return result;
+}
+
+/** グループ優先で床面配置し、成立しない場合だけ個体単位へ戻す。 */
+function arrangeFloor(originals, bed, obstacles, clearanceMm) {
+  const groups = compactArrangementGroups(originals, bed, clearanceMm);
+  let arrangedById = arrangeGroups(groups, bed, obstacles, clearanceMm);
+  let usedGroupedArrangement = arrangedById !== null;
+  // ブロックを崩さないと入らない組み合わせでは、従来の個体単位配置へ戻す。
+  // 見た目のまとまりより「全点を収める」ことを優先し、既存の成功ケースを退行させない。
+  if (!arrangedById) {
+    arrangedById = arrangeIndividually(originals, bed, obstacles, clearanceMm);
+    usedGroupedArrangement = false;
+  }
+  if (!arrangedById) return null;
+
+  let placements = originals.map((placement) => arrangedById.get(placement.id));
+  let invalid = findInvalidShapes(placements.map(toShape), bed, obstacles, clearanceMm);
+  // グループの複合外形は荷台奥側の壁候補を持たないため、探索後の壁クリアランス
+  // 検証で落ちる場合がある。その場合も個体配置を試してから失敗とする。
+  if (invalid.size > 0 && usedGroupedArrangement) {
+    const fallback = arrangeIndividually(originals, bed, obstacles, clearanceMm);
+    if (fallback) {
+      placements = originals.map((placement) => fallback.get(placement.id));
+      invalid = findInvalidShapes(placements.map(toShape), bed, obstacles, clearanceMm);
+    }
+  }
+  return invalid.size === 0 ? placements : null;
+}
+
+/** 配置が占める荷台前端からの奥行き。 */
+function usedDepth(placements) {
+  return placements.reduce((max, placement) => {
+    const bounds = boundsOf(toParts(placement));
+    return Math.max(max, bounds.y + bounds.d);
+  }, 0);
+}
+
+/**
+ * 多数ある同一機材から1台だけを外して床面配置を比較し、効果が十分な場合に縦積みを提案する。
+ * 候補自体はデータから消さず、計算済みの床面ブロックより後ろへ単独で表示する。
+ */
+function findStackSuggestion(originals, normal, bed, obstacles, clearanceMm) {
+  const normalDepth = usedDepth(normal);
+  const counts = new Map();
+  for (const placement of originals) {
+    const key = arrangementGroupKey(placement);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  let best = null;
+  for (const candidate of originals) {
+    // 少数セットを安易に縦積み扱いしない。Bパターンのような多数セットだけを対象とする。
+    if ((counts.get(arrangementGroupKey(candidate)) ?? 0) < 5) continue;
+
+    const coreOriginals = originals.filter((placement) => placement.id !== candidate.id);
+    const recalculatedCore = arrangeFloor(coreOriginals, bed, obstacles, clearanceMm);
+    const existingCore = findInvalidShapes(
+      coreOriginals.map(toShape), bed, obstacles, clearanceMm
+    ).size === 0 ? coreOriginals : null;
+    const core = [recalculatedCore, existingCore]
+      .filter(Boolean)
+      .sort((a, b) => usedDepth(a) - usedDepth(b))[0];
+    if (!core) continue;
+    const coreDepth = usedDepth(core);
+    const saving = normalDepth - coreDepth;
+    if (saving < Math.max(250, normalDepth * 0.1)) continue;
+
+    const held = placeStackCandidateBehindCore(
+      candidate, core, coreDepth, bed, obstacles, clearanceMm
+    );
+    if (!held) continue;
+    const byId = new Map(core.map((placement) => [placement.id, placement]));
+    byId.set(held.id, held);
+    const placements = originals.map((placement) => byId.get(placement.id));
+    if (findInvalidShapes(placements.map(toShape), bed, obstacles, clearanceMm).size > 0) continue;
+
+    if (!best || saving > best.saving) {
+      best = {
+        saving,
+        placements,
+        stackSuggestion: {
+          placementId: candidate.id,
+          name: candidate.snapshot?.name ?? '機材',
+          coreUsedDepthMm: coreDepth
+        }
+      };
+    }
+  }
+  return best;
+}
+
+/** 縦積み候補を、床面計算に含めていないことが見た目でも分かるよう後方へ退避する。 */
+function placeStackCandidateBehindCore(candidate, core, coreDepth, bed, obstacles, clearanceMm) {
+  const candidateBounds = boundsOf(toParts(candidate));
+  if (
+    candidateBounds.y >= coreDepth + clearanceMm &&
+    findInvalidShapes([...core.map(toShape), toShape(candidate)], bed, obstacles, clearanceMm).size === 0
+  ) {
+    return candidate;
+  }
+  const origin = { ...candidate, x: 0, y: 0 };
+  const frontBlocker = rectToShape({
+    id: '__stack_suggestion_front__', x: 0, y: 0, w: bed.w, d: coreDepth
+  });
+  const free = findFreeSpot(
+    toParts(origin), core.map(toShape), bed, [...obstacles, frontBlocker], clearanceMm
+  );
+  return free ? { ...candidate, x: free.x, y: free.y } : null;
+}
+
+/** まとめた機材ブロックを、実形状の凹みも利用しながら荷台へ配置する。 */
+function arrangeGroups(groups, bed, obstacles, clearanceMm) {
+  const arranged = new Map();
+  const occupied = [];
+
+  for (const group of groups) {
+    if (group.parts.length === 0) return null;
+    const free = findFreeSpot(group.parts, occupied, bed, obstacles, clearanceMm);
+    if (!free) return null;
+
+    for (const relative of group.placements) {
+      arranged.set(relative.id, {
+        ...relative,
+        x: free.x + relative.x,
+        y: free.y + relative.y
+      });
+    }
+    occupied.push({
+      id: `arrangement:${group.key}`,
+      parts: group.parts.map((part) => ({
+        ...part,
+        x: part.x + free.x,
+        y: part.y + free.y,
+        points: part.points?.map((point) => ({ x: point.x + free.x, y: point.y + free.y }))
+      }))
+    });
+  }
+  return arranged;
+}
+
+/** ブロック配置が成立しない場合の安全なフォールバック。 */
+function arrangeIndividually(placements, bed, obstacles, clearanceMm) {
+  const ordered = placements
+    .map((placement, index) => {
+      const bounds = boundsOf(toParts(placement));
+      return { placement, index, width: bounds.w, depth: bounds.d };
+    })
+    .sort((a, b) => b.depth - a.depth || b.width - a.width || a.index - b.index);
+  const arranged = new Map();
+  const occupied = [];
+
+  for (const { placement } of ordered) {
+    const free = findFreeSpot(
+      toParts({ ...placement, x: 0, y: 0 }), occupied, bed, obstacles, clearanceMm
+    );
+    if (!free) return null;
+    const next = { ...placement, x: free.x, y: free.y };
+    arranged.set(next.id, next);
+    occupied.push(toShape(next));
+  }
+  return arranged;
+}
+
+/** 同一機材を先にコンパクトな矩形ブロックへまとめ、ブロック面積の大きい順にする。 */
+function compactArrangementGroups(placements, bed, clearanceMm) {
+  const byKey = new Map();
+  placements.forEach((placement, index) => {
+    const key = arrangementGroupKey(placement);
+    const group = byKey.get(key) ?? { key, firstIndex: index, placements: [] };
+    group.placements.push(placement);
+    byKey.set(key, group);
+  });
+
+  return [...byKey.values()]
+    .map((group) => {
+      const totalArea = group.placements.reduce((sum, placement) => {
+        const bounds = boundsOf(toParts(placement));
+        return sum + bounds.w * bounds.d;
+      }, 0);
+      return { ...group, totalArea, ...compactGroup(group.placements, bed, clearanceMm) };
+    })
+    .sort((a, b) =>
+      b.totalArea - a.totalArea ||
+      b.depth - a.depth ||
+      b.width - a.width ||
+      a.firstIndex - b.firstIndex
+    );
+}
+
+/** equipmentId が無いテストデータでも、同じスナップショットなら同じ組として扱う。 */
+function arrangementGroupKey(placement) {
+  if (placement.equipmentId) return placement.equipmentId;
+  const { name, widthMm, depthMm, shape } = placement.snapshot;
+  return JSON.stringify([name, widthMm, depthMm, shape ?? null]);
+}
+
+/**
+ * 同一機材の向きを保ったまま、荷台幅のおおむね2/3以内で奥行きが最短になる並べ方を探す。
+ * 2組のブロックを荷台幅に組み合わせやすくしつつ、2点なら横並び、4点なら2×2になりやすい。
+ */
+function compactGroup(placements, bed, clearanceMm) {
+  const directionCounts = new Map();
+  for (const placement of placements) {
+    const bounds = boundsOf(toParts(placement));
+    const key = `${bounds.w}:${bounds.d}`;
+    directionCounts.set(key, (directionCounts.get(key) ?? 0) + 1);
+  }
+  const ordered = placements
+    .map((placement, index) => {
+      const bounds = boundsOf(toParts(placement));
+      return {
+        placement,
+        index,
+        width: bounds.w,
+        depth: bounds.d,
+        directionCount: directionCounts.get(`${bounds.w}:${bounds.d}`)
+      };
+    })
+    .sort((a, b) =>
+      b.directionCount - a.directionCount ||
+      b.depth - a.depth ||
+      b.width - a.width ||
+      a.index - b.index
+    );
+
+  const largestWidth = Math.max(...ordered.map((item) => item.width));
+  // 3点以上の組は荷台幅の約60%に抑えると、別の組と左右に組み合わせやすい。
+  // 2点だけは横並びを優先するため2/3まで許す。
+  const preferredRatio = placements.length === 2 ? 2 / 3 : 3 / 5;
+  const preferredMax = Math.max(largestWidth, Math.floor(bed.w * preferredRatio));
+  const widths = groupCandidateWidths(ordered, preferredMax, clearanceMm);
+  let best = null;
+
+  for (const width of widths) {
+    const candidate = packGroupWithinWidth(ordered, width, bed.d, clearanceMm);
+    if (!candidate) continue;
+    if (
+      !best ||
+      candidate.depth < best.depth ||
+      (candidate.depth === best.depth && candidate.width < best.width)
+    ) {
+      best = candidate;
+    }
+  }
+
+  // largestWidth の候補なら縦一列には必ずできる。壊れた寸法だけは呼び出し側で失敗扱いにする。
+  if (!best) {
+    return { placements, parts: [], width: bed.w + 1, depth: bed.d + 1 };
+  }
+  return best;
+}
+
+/** 1〜3点を横に置く幅と上限幅を候補にする。固定グリッドは使わない。 */
+function groupCandidateWidths(items, maxWidth, clearanceMm) {
+  const values = new Set([maxWidth]);
+  for (let i = 0; i < items.length; i++) {
+    values.add(clearanceMm + items[i].width);
+    for (let j = i + 1; j < items.length; j++) {
+      values.add(clearanceMm * 2 + items[i].width + items[j].width);
+      for (let k = j + 1; k < items.length; k++) {
+        values.add(
+          clearanceMm * 3 + items[i].width + items[j].width + items[k].width
+        );
+      }
+    }
+  }
+  return [...values]
+    .filter((width) => width <= maxWidth)
+    .sort((a, b) => a - b);
+}
+
+/** 指定幅の仮想荷台へ詰め、左前を(0,0)へ正規化した相対配置を返す。 */
+function packGroupWithinWidth(items, width, maxDepth, clearanceMm) {
+  const placed = [];
+  const occupied = [];
+
+  for (const { placement } of items) {
+    const origin = { ...placement, x: 0, y: 0 };
+    const free = findFreeSpot(toParts(origin), occupied, { w: width, d: maxDepth }, [], clearanceMm);
+    if (!free) return null;
+    const next = { ...placement, x: free.x, y: free.y };
+    placed.push(next);
+    occupied.push(toShape(next));
+  }
+
+  const block = boundsOf(occupied.flatMap((shape) => shape.parts));
+  const normalized = placed.map((placement) => ({
+    ...placement,
+    x: placement.x - block.x,
+    y: placement.y - block.y
+  }));
+  return {
+    placements: normalized,
+    parts: normalized.flatMap(toParts),
+    width: block.w,
+    depth: block.d
   };
 }
 

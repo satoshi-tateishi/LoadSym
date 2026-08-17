@@ -606,14 +606,28 @@ export function simulator() {
         return;
       }
       if (result.status === 'unchanged') {
-        this.notice('機材は既に自動配置と同じ位置にあります。');
+        if (result.stackSuggestion) {
+          this.notice(this.stackSuggestionNotice(slot.truck.name, result.stackSuggestion.name));
+        } else {
+          this.notice('機材は既に自動配置と同じ位置にあります。');
+        }
         return;
       }
 
       slot.placements = result.placements;
       this.selectedId = null;
       this.commit(slots);
-      this.notice(`${slot.truck.name} の機材を自動配置しました。`);
+      if (result.stackSuggestion) {
+        this.notice(this.stackSuggestionNotice(slot.truck.name, result.stackSuggestion.name));
+      } else {
+        this.notice(`${slot.truck.name} の機材を自動配置しました。`);
+      }
+    },
+
+    stackSuggestionNotice(truckName, equipmentName) {
+      return `${truckName} の機材を自動配置しました。` +
+        `${equipmentName} 1台は床面計算から外しています。` +
+        '他の機材への縦積みを検討してください。';
     },
 
     // ---------------- 履歴 ----------------

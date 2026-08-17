@@ -91,6 +91,42 @@ console.log('# autoArrangeSlot');
   eq('失敗時は元座標を保つ', result.placements, originals);
 }
 {
+  // 「積み込みテスト」の構成。人手の理想配置は奥行3185mmに、同型をブロック化して収めている。
+  const specs = [
+    ['upa1c', 'UPA-1C', 780, 460, [0, 180, 0, 90]],
+    ['la24', 'LA24a-AR', 540, 700, [180, 180]],
+    ['yellow', '黄箱 (大)', 760, 560, [180, 180]],
+    ['cl1', 'CL1', 760, 505, [0]],
+    ['cl5', 'CL5', 1160, 405, [0]],
+    ['cq2', 'CQ-2', 610, 675, [0, 0, 0, 0]],
+    ['upaar', 'UPA-AR', 535, 690, [0, 0, 0, 0]]
+  ];
+  const placements = specs.flatMap(([equipmentId, name, width, depth, rotations]) =>
+    rotations.map((rotation, index) => ({
+      id: `${equipmentId}-${index}`,
+      equipmentId,
+      snapshot: snapshot(name, width, depth, 800, 30),
+      x: 200 + index * 50,
+      y: 4000 + index * 100,
+      rotation
+    }))
+  );
+  const slot = makeSlot(placements);
+  slot.truck = {
+    name: '11t-Long', bedWidthMm: 2363, bedDepthMm: 9090,
+    bedHeightMm: 2730, maxPayloadKg: 11000
+  };
+  const result = autoArrangeSlot(slot);
+  const usedDepth = Math.max(...result.placements.map((placement) => {
+    const turned = placement.rotation % 180 !== 0;
+    return placement.y + (turned ? placement.snapshot.widthMm : placement.snapshot.depthMm);
+  }));
+  eq('積み込みテスト型を同一機材のブロックで配置する',
+    { status: result.status, invalid: summarize({ ...slot, placements: result.placements }).invalidCount },
+    { status: 'arranged', invalid: 0 });
+  eq('積み込みテスト型の使用奥行きを理想に近づける', usedDepth <= 3350, true);
+}
+{
   // 実動作確認と同じ11tロング（2410×9500mm）に、5種類を4点ずつ積む。
   const types = [
     snapshot('CL5', 1160, 405, 800, 30),
@@ -117,6 +153,54 @@ console.log('# autoArrangeSlot');
     { status: first.status, count: first.placements.length, invalid: summarize({ ...slot, placements: first.placements }).invalidCount },
     { status: 'arranged', count: 20, invalid: 0 });
   eq('11tの20点配置は毎回同じ', first.placements, second.placements);
+}
+{
+  // 「積み込みテストB」の20点構成。UPA-ARを1台だけ床面計算から外すと、
+  // 残り19点がまとまり、外した1台を他機材への縦積み候補にできる。
+  const specs = [
+    ['650r2', '650-R2', 770, 575, [[90, 590, 5], [90, 10, 5]]],
+    ['msl2a', 'MSL-2A', 1070, 615, [[90, 1790, 5], [90, 1170, 5]]],
+    ['upa1c', 'UPA-1C', 780, 460, [[270, 940, 2240], [90, 5, 2240], [270, 470, 2240], [270, 1405, 2240]]],
+    ['upaar', 'UPA-AR', 535, 690, [[180, 1870, 1685], [0, 545, 1545], [0, 940, 3977], [180, 1870, 2380], [270, 1175, 1685], [0, 5, 1545]]],
+    ['cl1', 'CL1', 760, 505, [[0, 320, 3025]]],
+    ['cl5', 'CL5', 1160, 405, [[180, 1085, 3075]]],
+    ['yellow', '黄箱 (大)', 760, 560, [[90, 10, 780], [90, 590, 780]]],
+    ['dice', 'サイコロ', 600, 600, [[0, 1805, 1080], [0, 1200, 1080]]]
+  ];
+  const placements = specs.flatMap(([equipmentId, name, width, depth, positions]) =>
+    positions.map(([rotation, x, y], index) => ({
+      id: `${equipmentId}-${index}`,
+      equipmentId,
+      snapshot: snapshot(name, width, depth, 800, 30),
+      x,
+      y,
+      rotation
+    }))
+  );
+  const slot = makeSlot(placements);
+  slot.truck = {
+    name: '11t-Long', bedWidthMm: 2410, bedDepthMm: 9500,
+    bedHeightMm: 2730, maxPayloadKg: 11000
+  };
+  const result = autoArrangeSlot(slot);
+  const core = result.placements.filter(
+    (placement) => placement.id !== result.stackSuggestion?.placementId
+  );
+  const coreDepth = Math.max(...core.map((placement) => {
+    const turned = placement.rotation % 180 !== 0;
+    return placement.y + (turned ? placement.snapshot.widthMm : placement.snapshot.depthMm);
+  }));
+  eq('B型ではUPA-ARを1台だけ縦積み候補にする',
+    {
+      status: result.status,
+      id: result.stackSuggestion?.placementId,
+      name: result.stackSuggestion?.name,
+      count: result.placements.length
+    },
+    { status: 'unchanged', id: 'upaar-2', name: 'UPA-AR', count: 20 });
+  eq('B型の残り19点を床面へ正常に配置する',
+    { invalid: summarize({ ...slot, placements: result.placements }).invalidCount, coreDepth },
+    { invalid: 0, coreDepth: result.stackSuggestion?.coreUsedDepthMm });
 }
 
 console.log('# summarize');

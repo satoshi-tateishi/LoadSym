@@ -764,6 +764,10 @@ export function findFreeSpot(parts, occupied, bed, obstacles = [], clearanceMm =
           points: part.points?.map((point) => ({ x: x + point.x, y: y + point.y }))
         }))
       };
+      // 左前の候補は clearanceMm から始まるが、右・奥側も同じ基準で確かめる。
+      // 枠内だけを見て返すと、大きな複合ブロックが壁から数mmの位置に入り、
+      // 呼び出し側の最終検証で同じ候補が不正扱いになる。
+      if (!fitsInBed(boundsOf(candidate.parts), bed, clearanceMm)) continue;
       const collides = blockers.some((other) => shapesOverlap(candidate, other, clearanceMm));
       if (!collides) return { x, y };
     }
