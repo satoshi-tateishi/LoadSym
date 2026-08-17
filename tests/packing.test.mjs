@@ -124,7 +124,37 @@ console.log('# autoArrangeSlot');
   eq('積み込みテスト型を同一機材のブロックで配置する',
     { status: result.status, invalid: summarize({ ...slot, placements: result.placements }).invalidCount },
     { status: 'arranged', invalid: 0 });
-  eq('積み込みテスト型の使用奥行きを理想に近づける', usedDepth <= 3350, true);
+  eq('積み込みテスト型の使用奥行きを3295mm以下に保つ', usedDepth <= 3295, true);
+
+  const zeroPlacements = placements.map((placement) => ({
+    ...placement,
+    snapshot: { ...placement.snapshot },
+    rotation: 0
+  }));
+  const zeroSlot = { ...slot, placements: zeroPlacements };
+  const beforeZero = JSON.stringify(zeroSlot);
+  const zeroFirst = autoArrangeSlot(zeroSlot);
+  const zeroSecond = autoArrangeSlot(zeroSlot);
+  const zeroDepth = Math.max(...zeroFirst.placements.map((placement) => {
+    const turned = placement.rotation % 180 !== 0;
+    return placement.y + (turned ? placement.snapshot.widthMm : placement.snapshot.depthMm);
+  }));
+  eq('全機材0度のA型を回転探索で3580mm未満にする', zeroDepth < 3580, true);
+  eq('回転探索を含めてもA型の結果は毎回同じ', zeroFirst.placements, zeroSecond.placements);
+  eq('回転探索はslot・placements・snapshotを破壊しない', JSON.stringify(zeroSlot), beforeZero);
+}
+{
+  const circleSnapshot = snapshot('円柱', 400, 400, 500, 10);
+  circleSnapshot.shape = { parts: [{ kind: 'circle', cx: 200, cy: 200, r: 200 }] };
+  const placements = [
+    { id: 'circle-1', equipmentId: 'circle', snapshot: circleSnapshot, x: 600, y: 900, rotation: 90 },
+    { id: 'circle-2', equipmentId: 'circle', snapshot: circleSnapshot, x: 600, y: 900, rotation: 90 },
+    { id: 'square-1', equipmentId: 'square', snapshot: snapshot('正方形', 300, 300, 500, 10), x: 700, y: 900, rotation: 180 },
+    { id: 'square-2', equipmentId: 'square', snapshot: snapshot('正方形', 300, 300, 500, 10), x: 700, y: 900, rotation: 180 }
+  ];
+  const result = autoArrangeSlot(makeSlot(placements));
+  eq('円・正方形は同じ外形の回転候補を増やさない',
+    result.placements.map((placement) => placement.rotation), [90, 90, 180, 180]);
 }
 {
   // 実動作確認と同じ11tロング（2410×9500mm）に、5種類を4点ずつ積む。
@@ -153,6 +183,45 @@ console.log('# autoArrangeSlot');
     { status: first.status, count: first.placements.length, invalid: summarize({ ...slot, placements: first.placements }).invalidCount },
     { status: 'arranged', count: 20, invalid: 0 });
   eq('11tの20点配置は毎回同じ', first.placements, second.placements);
+}
+{
+  const types = [
+    snapshot('CL5', 1160, 405, 800, 30),
+    snapshot('BP (小)', 530, 365, 400, 30),
+    snapshot('SX300', 429, 312, 586, 18),
+    snapshot('CQ-2', 610, 675, 800, 30),
+    snapshot('LA24a-AR', 540, 700, 800, 30)
+  ];
+  const placements = Array.from({ length: 60 }, (_, index) => ({
+    id: `large-${index + 1}`,
+    equipmentId: `large-type-${index % types.length}`,
+    snapshot: types[index % types.length],
+    x: 50 + (index % 4) * 300,
+    y: 50 + Math.floor(index / 4) * 350,
+    rotation: 0
+  }));
+  const slot = makeSlot(placements);
+  slot.truck = {
+    name: '60点計測用', bedWidthMm: 2410, bedDepthMm: 12000,
+    bedHeightMm: 2660, maxPayloadKg: 11000
+  };
+  const result = autoArrangeSlot(slot);
+  eq('戦略上限に掛かる60点も正常に配置する',
+    {
+      status: result.status,
+      count: result.placements.length,
+      invalid: summarize({ ...slot, placements: result.placements }).invalidCount
+    },
+    { status: 'arranged', count: 60, invalid: 0 });
+
+  // 点数の多い構成では、グループ配置が最終検証で落ちて個体単位配置が勝つことがある。
+  // 個体配置を「全戦略が失敗したときの保険」に格下げすると、この解が探索空間から
+  // 消えて 8616mm → 9233mm へ退行する。奥行きまで見ないとその退行を検知できない。
+  const depth = Math.max(...result.placements.map((placement) => {
+    const turned = placement.rotation % 180 !== 0;
+    return placement.y + (turned ? placement.snapshot.widthMm : placement.snapshot.depthMm);
+  }));
+  eq('60点で個体単位配置の解を候補から外さない', depth <= 8616, true);
 }
 {
   // 「積み込みテストB」の20点構成。UPA-ARを1台だけ床面計算から外すと、
