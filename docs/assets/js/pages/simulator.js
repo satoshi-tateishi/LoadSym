@@ -382,7 +382,10 @@ export function simulator() {
         }
 
         if (dropSlot === working.slot) {
-          const threshold = SNAP_PIXELS * mmPerPixel(svg);
+          // Altを押して離したときは、外接bboxのスナップを止めて掴んだ位置を優先する。
+          // 多角形の斜面どうしを少しずらして寄せる場合でも、重なりとクリアランスの
+          // 判定は後段の movePlacement / settle が通常どおり行う。
+          const threshold = upEvent.altKey ? 0 : SNAP_PIXELS * mmPerPixel(svg);
           const result = movePlacement(
             working, placementId, { x: placement.x, y: placement.y }, threshold, this.clearanceMm
           );
@@ -449,7 +452,9 @@ export function simulator() {
       const position = this.landingPosition(
         targetSvg, targetSlot, moving, upEvent.clientX, upEvent.clientY, offset
       );
-      const threshold = SNAP_PIXELS * mmPerPixel(targetSvg);
+      // エリアをまたぐドラッグも同じ操作感にする。Altはスナップだけを止め、
+      // 荷台内へのクランプと干渉判定は無効にしない。
+      const threshold = upEvent.altKey ? 0 : SNAP_PIXELS * mmPerPixel(targetSvg);
 
       const result = movePlacementToSlot(
         sourceSlot, targetSlot, placementId, position, threshold, this.clearanceMm

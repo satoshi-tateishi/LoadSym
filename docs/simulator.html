@@ -72,7 +72,12 @@
           <span class="tabular-nums" x-text="`前 ${selectedInfo.front} / 後 ${selectedInfo.back} mm`"></span>
           <!-- 操作の説明は内容が変わらないので右端に固定する。左詰めのままだと、
                機材名や寸法の桁数で位置が動き、目が毎回それを追うことになる。 -->
-          <span class="ml-auto text-gray-500">R:回転 / Delete:削除 / Ctrl+D:複製 / 矢印:移動</span>
+          <span class="ml-auto text-gray-500">
+            <span class="font-bold">R:</span>回転 /
+            <span class="font-bold">Delete</span>:削除 /
+            <span class="font-bold">Ctrl+D</span>:複製 / <span class="font-bold">矢印</span>:移動 /
+            <span class="font-bold">Alt(Option)+ドラッグ</span>:スナップなし
+          </span>
         </div>
       </template>
       <p x-show="!selectedInfo" class="text-gray-400">

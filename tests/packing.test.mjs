@@ -132,6 +132,28 @@ console.log('# movePlacement');
   eq('壁にスナップする', { x: placements[0].x, y: placements[0].y }, { x: 5, y: 5 });
 }
 {
+  // Altドラッグは画面側からしきい値0を渡す。SX300の外接bboxは重なるが、
+  // 斜面間に5mmある配置なので、厳密形状判定を通って指定座標を保てる。
+  const sx300 = snapshot('SX300', 429, 312, 586, 18);
+  sx300.shape = { parts: [{ kind: 'polygon', points: [
+    { x: 429, y: 108 }, { x: 429, y: 48 }, { x: 380, y: 0 }, { x: 51, y: 0 },
+    { x: 0, y: 48 }, { x: 0, y: 108 }, { x: 104, y: 312 }, { x: 326, y: 312 }
+  ] }] };
+  const slot = makeSlot([
+    { id: 'sx1', snapshot: sx300, x: 500, y: 500, rotation: 0 },
+    { id: 'sx2', snapshot: sx300, x: 5, y: 5, rotation: 270 }
+  ]);
+  const withoutSnap = movePlacement(slot, 'sx2', { x: 189, y: 518 }, 0, 5);
+  const withSnap = movePlacement(slot, 'sx2', { x: 189, y: 518 }, 120, 5);
+  eq('多角形はスナップなしなら斜面をずらして配置できる',
+    withoutSnap.placements.find((p) => p.id === 'sx2'),
+    { id: 'sx2', snapshot: sx300, x: 189, y: 518, rotation: 270 });
+  eq('同じ位置でも通常スナップならbboxの辺へ吸着する',
+    { x: withSnap.placements.find((p) => p.id === 'sx2').x,
+      y: withSnap.placements.find((p) => p.id === 'sx2').y },
+    { x: 183, y: 500 });
+}
+{
   // 障害物（タイヤハウス）の上には物理的に置けない。赤くして見せるのではなく、
   // 移動そのものを棄却して元の位置に留める。
   const tire = { id: 'tire', label: 'タイヤハウス', x: 0, y: 1800, w: 300, d: 900, heightMm: 300 };
