@@ -195,17 +195,41 @@ function renderPlacement(placement, bed, invalidIds, selectedId, maskNamespace) 
   return [
     `<g class="placement" data-placement-id="${escapeXml(placement.id)}"`,
     ` transform="${placementTransform(placement, bed)}" style="cursor:grab">`,
-    drawing.hasCurves ? outlineMask(maskId, drawing, strokeWidth) : '',
-    `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fill)}"`,
-    ` fill-opacity="${invalid ? 0.85 : 0.7}"/>`,
-    `<path class="outline" d="${drawing.outlinePath}" fill="none"`,
-    ` stroke="${stroke}" stroke-width="${drawing.hasCurves ? strokeWidth * 2 : strokeWidth}"`,
-    drawing.hasCurves ? ` mask="url(#${maskId})"/>` : '/>',
+    symbolPaths(drawing, maskId, stroke, strokeWidth, fill, invalid ? 0.85 : 0.7),
     `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#0f172a" text-anchor="middle" dominant-baseline="middle" pointer-events="none">`,
     escapeXml(label.text),
     '</text>',
     '</g>'
+  ].join('');
+}
+
+/**
+ * シンボル本体（塗り＋輪郭線）のマークアップ。
+ *
+ * 単一パーツ（大半の機材）は fill と stroke を同じ1本の <path> にまとめる。
+ * Chromiumは、透過塗りの <path> に fill="none" の別パス（輪郭線専用）を重ねると、
+ * その周囲へ薄いグレーの縁を誤って合成することがある（L字・円のツライチ外形線を
+ * 導入した 989bc55 で二重パス化した際に混入し、オフスクリーン描画では再現しない
+ * 実画面合成だけの現象と確認済み）。1パーツなら内部の継ぎ目が無く、塗りパスへ
+ * そのまま centered stroke を掛けても見た目が変わらないため、二重パスをやめて
+ * この現象自体を避けられる。
+ *
+ * 複合パーツ（L字など）は内部の継ぎ目を消すため union outline / マスクが要るので、
+ * 従来どおり2本の <path> に分ける（この場合は現象が残る）。
+ */
+function symbolPaths(drawing, maskId, strokeColor, strokeWidth, fillColor, fillOpacity, dashArray) {
+  const dash = dashArray ? ` stroke-dasharray="${dashArray}"` : '';
+  if (drawing.singlePart) {
+    return `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fillColor)}"` +
+      ` fill-opacity="${fillOpacity}" stroke="${strokeColor}" stroke-width="${strokeWidth}"${dash}/>`;
+  }
+  return [
+    drawing.hasCurves ? outlineMask(maskId, drawing, strokeWidth) : '',
+    `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(fillColor)}" fill-opacity="${fillOpacity}"/>`,
+    `<path class="outline" d="${drawing.outlinePath}" fill="none"`,
+    ` stroke="${strokeColor}" stroke-width="${drawing.hasCurves ? strokeWidth * 2 : strokeWidth}"${dash}`,
+    drawing.hasCurves ? ` mask="url(#${maskId})"/>` : '/>'
   ].join('');
 }
 
@@ -246,6 +270,10 @@ function placementDrawing(placement) {
     outlinePath: hasCurves ? fillPath : unionOutline(outlineParts).map(lineSubpath).join(' '),
     labelBox,
     hasCurves,
+    // 1パーツなら内部の継ぎ目が無いため、塗りパスへ直接strokeを掛けられる
+    // （symbolPaths参照）。パーツ数はズーム後の座標変換に影響しないので、
+    // partsをそのまま数えてよい。
+    singlePart: parts.length === 1,
     bounds: boxes.reduce((result, box) => ({
       x: Math.min(result.x, box.x), y: Math.min(result.y, box.y),
       right: Math.max(result.right, box.x + box.w), bottom: Math.max(result.bottom, box.y + box.h)
@@ -428,12 +456,7 @@ export function showDropGhost(svg, placement) {
   svg.insertAdjacentHTML('beforeend', [
     `<g class="drop-ghost" data-placement-id="${escapeXml(placement.id)}"`,
     ` transform="${placementTransform(placement, bed)}" pointer-events="none">`,
-    drawing.hasCurves ? outlineMask(maskId, drawing, 14) : '',
-    `<path class="fill" d="${drawing.fillPath}" fill="${escapeXml(placement.snapshot.color)}"`,
-    ` fill-opacity="0.35"/>`,
-    `<path class="outline" d="${drawing.outlinePath}" fill="none" stroke="#1d4ed8"`,
-    ` stroke-width="${drawing.hasCurves ? 28 : 14}" stroke-dasharray="90 60"`,
-    drawing.hasCurves ? ` mask="url(#${maskId})"/>` : '/>',
+    symbolPaths(drawing, maskId, '#1d4ed8', 14, placement.snapshot.color, 0.35, '90 60'),
     `<text x="${cx}" y="${cy}" font-size="${label.fontSize}"${transform}`,
     ` fill="#1e293b" fill-opacity="0.7" text-anchor="middle" dominant-baseline="middle">`,
     escapeXml(label.text),
