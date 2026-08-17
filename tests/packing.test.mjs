@@ -2,7 +2,7 @@
 
 import {
   movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
-  createPlacement, createStagingSlot, isStaging, STAGING_SLOT,
+  createPlacement, workingBedOf, REFERENCE_DEPTH_MM,
   clampToBed, duplicatePlacement, autoArrangeSlot
 } from '../docs/assets/js/packing.js';
 
@@ -454,41 +454,56 @@ console.log('# createPlacement');
   eq('機材の形をスナップショットに固定する', created.snapshot.shape, shape);
 }
 
-console.log('# 機材置き場');
+console.log('# リアゲート側の仮置きゾーン（workingBedOf）');
 {
-  const staging = createStagingSlot();
-  eq('スロット0で作られる', staging.slot, STAGING_SLOT);
-  eq('種別がstaging', isStaging(staging), true);
-  eq('高さ制限なし', staging.truck.bedHeightMm, null);
-  eq('積載重量制限なし', staging.truck.maxPayloadKg, null);
-  eq('中身は空', staging.placements.length, 0);
+  const slot = makeSlot([]);
+  const work = workingBedOf(slot);
+  eq('幅は実寸のまま', work.w, slot.truck.bedWidthMm);
+  eq('奥行きはREFERENCE_DEPTH_MMまで拡張される', work.d, REFERENCE_DEPTH_MM);
 }
 {
-  // bedHeightMm が null のとき、素の比較だと 0 扱いになり全機材が高さ超過になる回帰テスト
-  const staging = createStagingSlot();
-  staging.placements = [
-    { id: 'p1', snapshot: snapshot('背の高い機材', 600, 600, 2500, 30), x: 10, y: 10, rotation: 0 },
-    { id: 'p2', snapshot: snapshot('低い機材', 600, 600, 200, 10), x: 620, y: 10, rotation: 0 }
-  ];
-  const s = summarize(staging);
-  eq('高さ超過を判定しない', s.overHeightCount, 0);
-  eq('積載率は算出しない', s.payloadRatio, null);
-  eq('過積載にならない', s.overPayload, false);
-  eq('総重量は集計する', s.totalWeightKg, 40);
+  // 実荷台の奥行き(4400mm)を超えた位置(y=4500)は「仮置き中」＝実荷台からのはみ出し。
+  const overflowing = { id: 'p1', snapshot: snapshot('仮置き中', 600, 600, 500, 30), x: 10, y: 4500, rotation: 0 };
+  const inBed = { id: 'p2', snapshot: snapshot('積み込み済み', 600, 600, 500, 20), x: 10, y: 10, rotation: 0 };
+  const slot = makeSlot([overflowing, inBed]);
+  const s = summarize(slot);
+  eq('実荷台をはみ出した機材は赤くなる', s.invalidIds.has('p1'), true);
+  eq('実荷台内の機材は赤くならない', s.invalidIds.has('p2'), false);
+  eq('総重量は仮置き中の機材も含む', s.totalWeightKg, 50);
+  eq('配置率の分子には仮置き中の機材を含めない', s.usedAreaMm2, 600 * 600);
+}
+{
+  // 実荷台をはみ出した位置（仮置きゾーン）でも、重なり・隙間不足の判定は通常どおり
+  // 働く。「機材置き場だけ隙間を問わない」という特例は無くなった。
+  const slot = makeSlot([
+    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 4500, rotation: 0 },
+    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 411, y: 4500, rotation: 0 }
+  ]);
+  eq('仮置きゾーンでも隙間不足は赤くなる', summarize(slot, 10).invalidCount, 2);
+}
+{
+  // 自動配置は実荷台の範囲だけを対象に詰め直す。仮置き中の機材も、実荷台に
+  // 収まるならそちらへ詰め直される。
+  const staged = { id: 'p1', snapshot: snapshot('仮置き中', 600, 600, 500, 10), x: 10, y: 4500, rotation: 0 };
+  const slot = makeSlot([staged]);
+  const result = autoArrangeSlot(slot);
+  eq('自動配置に成功', result.status, 'arranged');
+  eq('実荷台の左前へ詰め直される', { x: result.placements[0].x, y: result.placements[0].y }, { x: 5, y: 5 });
+  eq('実荷台内に収まり赤くならない', summarize({ ...slot, placements: result.placements }).invalidCount, 0);
 }
 
 console.log('# movePlacementToSlot（エリア間移動）');
 {
-  const staging = createStagingSlot();
-  staging.placements = [
+  const source = makeSlot([
     { id: 'p1', snapshot: snapshot('メインSP', 700, 500, 900, 45), x: 1000, y: 500, rotation: 0 }
-  ];
-  const truck = makeSlot([
+  ]);
+  const target = makeSlot([
     { id: 't1', snapshot: snapshot('先客', 600, 600, 500, 20), x: 10, y: 10, rotation: 0 }
   ]);
+  target.slot = 2;
 
   // 荷台の左前あたりへドロップ → 壁にスナップし、先客とぶつかるので押し出される
-  const r = movePlacementToSlot(staging, truck, 'p1', { x: 5, y: 4 }, 60);
+  const r = movePlacementToSlot(source, target, 'p1', { x: 5, y: 4 }, 60);
   eq('移動元から取り除かれる', r.source.length, 0);
   eq('移動先に追加される', r.target.length, 2);
 
@@ -499,27 +514,30 @@ console.log('# movePlacementToSlot（エリア間移動）');
   const pushed = r.target.find((p) => p.id === 't1');
   eq('先客が押し出される', { x: pushed.x, y: pushed.y }, { x: 10, y: 510 });
   eq('既定のクリアランス', pushed.y - (moved.y + 500), 5);
-  eq('重なりが残らない', summarize({ ...truck, placements: r.target }).invalidCount, 0);
+  eq('重なりが残らない', summarize({ ...target, placements: r.target }).invalidCount, 0);
   eq('収束する', r.truncated, false);
 }
 {
-  // トラック → 置き場へ戻せる。機材のスナップショットは失われない。
-  const truck = makeSlot([
+  // 別のトラックへ戻せる。機材のスナップショットは失われない。
+  const source = makeSlot([
     { id: 'p1', snapshot: snapshot('アンプラック', 650, 900, 1400, 130), x: 10, y: 10, rotation: 90 }
   ]);
-  const staging = createStagingSlot();
-  const r = movePlacementToSlot(truck, staging, 'p1', { x: 2000, y: 800 }, 60);
+  const target = makeSlot([]);
+  target.slot = 2;
+  // 移動先の実荷台奥行き(4400mm)を超えた位置。仮置きゾーンとして受け入れる。
+  const r = movePlacementToSlot(source, target, 'p1', { x: 200, y: 6000 }, 60);
   const moved = r.target[0];
-  eq('トラック側が空になる', r.source.length, 0);
+  eq('移動元が空になる', r.source.length, 0);
   eq('機材情報が保たれる', moved.snapshot.name, 'アンプラック');
   eq('回転角も保たれる', moved.rotation, 90);
-  eq('置き場の集計に乗る', summarize({ ...staging, placements: r.target }).totalWeightKg, 130);
+  eq('移動先の集計に乗る', summarize({ ...target, placements: r.target }).totalWeightKg, 130);
 }
 {
   // 存在しないidを渡しても壊れない
-  const staging = createStagingSlot();
-  const truck = makeSlot([]);
-  const r = movePlacementToSlot(staging, truck, 'missing', { x: 0, y: 0 }, 60);
+  const source = makeSlot([]);
+  const target = makeSlot([]);
+  target.slot = 2;
+  const r = movePlacementToSlot(source, target, 'missing', { x: 0, y: 0 }, 60);
   eq('存在しない配置は無視する', { s: r.source.length, t: r.target.length }, { s: 0, t: 0 });
 }
 
@@ -556,15 +574,15 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
   eq('位置も元のまま', { x: r.placements[0].x, y: r.placements[0].y }, { x: 10, y: 10 });
 }
 {
-  // 逃げ場のない荷台。回転すると隣がどちらへ逃げても荷台外に出るので、回転ごと棄却する。
+  // 実荷台に逃げ場がなくても、リアゲート側の仮置きゾーンへ逃がして回転できる。
   const slot = makeBed(1000, 700, [
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
     { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 420, y: 10, rotation: 0 }
   ]);
   const r = rotatePlacement(slot, 'p1');
-  eq('押し出し先がなければ回転しない', r.rejected, true);
-  eq('押し出される側も動かない', r.placements.find((p) => p.id === 'p2').x, 420);
-  eq('はみ出しが生まれない', summarize({ ...slot, placements: r.placements }).invalidCount, 0);
+  eq('実荷台に押し出し先がなくても仮置きゾーンへ逃がして回転する', r.rejected, false);
+  eq('押し出された側は実荷台をはみ出して赤くなる',
+    summarize({ ...slot, placements: r.placements }).invalidCount, 1);
 }
 {
   // 壁の外へは出さない。壁に押し付けた形で止まる。
@@ -572,32 +590,39 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 }
   ]);
   const placement = slot.placements[0];
-  // 壁からクリアランスぶん内側で止まる（既定5mm）
+  // 壁からクリアランスぶん内側で止まる（既定5mm）。奥行き方向は実荷台ではなく
+  // 仮置きゾーンの外壁（REFERENCE_DEPTH_MM）で止まる。
   eq('右の壁で止まる', clampToBed({ ...placement, x: 9999, y: 10 }, slot).x, 1700 - 400 - 5);
-  eq('後ろの壁で止まる', clampToBed({ ...placement, x: 10, y: 9999 }, slot).y, 4400 - 600 - 5);
+  eq('仮置きゾーンの奥で止まる', clampToBed({ ...placement, x: 10, y: 99999 }, slot).y, REFERENCE_DEPTH_MM - 600 - 5);
   eq('左の壁で止まる', clampToBed({ ...placement, x: -500, y: 10 }, slot).x, 5);
   eq('クリアランスを変えると止まる位置も変わる',
     clampToBed({ ...placement, x: 9999, y: -500 }, slot, 1), { x: 1700 - 400 - 1, y: 1 });
   // 回転後の外形で判定する（幅と奥行きが入れ替わる）
-  const turned = { ...placement, rotation: 90, x: 9999, y: 9999 };
-  eq('回転後の外形で止まる', clampToBed(turned, slot), { x: 1700 - 600 - 5, y: 4400 - 400 - 5 });
+  const turned = { ...placement, rotation: 90, x: 9999, y: 99999 };
+  eq('回転後の外形で止まる', clampToBed(turned, slot), { x: 1700 - 600 - 5, y: REFERENCE_DEPTH_MM - 400 - 5 });
 }
 {
-  // 荷台より大きい機材は上限が負になる。左前の角に寄せる。
+  // 幅は実寸のままなので、荷台より大きい機材は左右方向で角に寄る。
+  // 奥行き方向はworkingBedOfで拡張されているため、900mm程度は普通に収まる。
   const slot = makeBed(500, 500, []);
   const oversize = { id: 'p1', snapshot: snapshot('大物', 900, 900, 500, 10), x: 300, y: 300, rotation: 0 };
-  eq('荷台より大きければ角に寄る', clampToBed(oversize, slot), { x: 0, y: 0 });
+  const clamped = clampToBed(oversize, slot);
+  eq('幅方向は角に寄る', clamped.x, 0);
+  eq('奥行き方向は仮置きゾーンに収まる', clamped.y, 300);
 }
 {
-  // 機材置き場は積み込み前の作業台。収まるかどうかを問わない。
-  const staging = createStagingSlot();
-  staging.placements = [
+  // 実荷台の奥（リアゲート側）は仮置きゾーンとして扱う。REFERENCE_DEPTH_MMまでは
+  // 壁で止めず、実荷台をはみ出す移動も棄却しない（summarize で赤くなるだけ）。
+  const slot = makeSlot([
     { id: 'p1', snapshot: snapshot('A', 700, 500, 900, 45), x: 100, y: 100, rotation: 0 }
-  ];
-  eq('置き場では壁で止めない', clampToBed({ ...staging.placements[0], x: 9999, y: 10 }, staging).x, 9999);
-  const r = movePlacement(staging, 'p1', { x: 1900, y: 100 }, 0);
-  eq('置き場では棄却しない', r.rejected, false);
-  eq('置き場でははみ出せる', r.placements[0].x, 1900);
+  ]);
+  eq('実荷台の奥行き(4400mm)を超えても壁で止めない',
+    clampToBed({ ...slot.placements[0], x: 100, y: 6000 }, slot).y, 6000);
+  eq('仮置きゾーンの奥（REFERENCE_DEPTH_MM）では止まる',
+    clampToBed({ ...slot.placements[0], x: 100, y: 99999 }, slot).y, REFERENCE_DEPTH_MM - 500 - 5);
+  const r = movePlacement(slot, 'p1', { x: 100, y: 6000 }, 0);
+  eq('仮置きゾーンへの移動は棄却しない', r.rejected, false);
+  eq('実荷台をはみ出した位置に置ける', r.placements[0].y, 6000);
 }
 {
   // 既にはみ出している既存データを開いても、悪化させない操作は通す。
@@ -616,13 +641,13 @@ const makeBed = (bedWidthMm, bedDepthMm, placements) => ({
   eq('はみ出しが解消する', summarize({ ...slot, placements: fixed.placements }).invalidCount, 0);
 }
 {
-  // 別エリアへのドロップも、移動先に収まらなければ移動元に留める。
-  const staging = createStagingSlot();
-  staging.placements = [
+  // 別トラックへのドロップも、移動先に収まらなければ移動元に留める。
+  const source = makeSlot([
     { id: 'p1', snapshot: snapshot('長物', 400, 1800, 500, 10), x: 100, y: 100, rotation: 90 }
-  ];
-  const truck = makeBed(1000, 4400, []);
-  const r = movePlacementToSlot(staging, truck, 'p1', { x: 10, y: 10 }, 0);
+  ]);
+  const target = makeBed(1000, 4400, []);
+  target.slot = 2;
+  const r = movePlacementToSlot(source, target, 'p1', { x: 10, y: 10 }, 0);
   eq('収まらない移動は棄却する', r.rejected, true);
   eq('移動元に留まる', r.source.length, 1);
   eq('移動先には増えない', r.target.length, 0);
@@ -704,32 +729,23 @@ console.log('# クリアランス設定');
   eq('余地があれば押し出しで解消する', onto.rejected, false);
   eq('重なりは残らない', summarize({ ...slot, placements: onto.placements }, 1).invalidCount, 0);
 
-  // 余地が無ければ、赤い状態でも接触・重なりは作らせない。
-  // クリアランス不足と同じ集合で見ていると、どれも既に赤いために悪化を検知できない。
+  // 実荷台に余地が無くても、押し出し先はworkingBedOf（リアゲート側の仮置きぶんを
+  // 含む）まで広がっているため棄却されない。押し出された側は実荷台からはみ出し、
+  // summarize() で赤くなる。
   const tight = makeBed(1603, 700, [
     { id: 'q1', snapshot: snapshot('A', 800, 600, 500, 10), x: 1, y: 10, rotation: 0 },
     { id: 'q2', snapshot: snapshot('B', 800, 600, 500, 10), x: 802, y: 10, rotation: 0 }
   ]);
   eq('前提: 10mm設定では全機材が赤い', summarize(tight, 10).invalidCount, 2);
   const collide = movePlacement(tight, 'q1', { x: 802, y: 10 }, 0, 10);
-  eq('逃げ場が無ければ重ねられない', collide.rejected, true);
-  eq('1mm未満は残らない', summarize({ ...tight, placements: collide.placements }, 1).invalidCount, 0);
+  eq('実荷台に余地が無くても仮置きゾーンへ押し出して解消する', collide.rejected, false);
+  eq('押し出された側は実荷台をはみ出して赤くなる',
+    summarize({ ...tight, placements: collide.placements }, 1).invalidCount, 1);
 
   // クリアランス不足のまま荷台内で動かすのは通す（直す手立てを残すため）
   const ok = movePlacement(slot, 'p1', { x: 5, y: 10 }, 0, 10);
   eq('荷台内の移動は通す', ok.rejected, false);
   eq('移動が反映される', ok.placements.find((p) => p.id === 'p1').x, 5);
-}
-{
-  // 機材置き場は判定の対象外。作業台なので隙間を問わず、重なりだけを見る。
-  const staging = createStagingSlot();
-  staging.placements = [
-    { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 },
-    { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 411, y: 10, rotation: 0 }
-  ];
-  eq('置き場は10mm設定でも赤くしない', summarize(staging, 10).invalidCount, 0);
-  staging.placements[1].x = 200; // 実際に重ねる
-  eq('置き場でも重なりは赤くする', summarize(staging, 10).invalidCount, 2);
 }
 {
   // 壁との隙間も設定値で見る
@@ -755,16 +771,18 @@ console.log('# クリアランス設定');
   eq('隣が1mm押しのけられる', p2.x - (p1.x + 400), 1);
   eq('接触が残らない', summarize({ ...slot, placements: touching.placements }, 1).invalidCount, 0);
 
-  // 押しのける余地がなければ棄却される。
-  // 機材2つでちょうど埋まる荷台なので、隣はどちらへ逃げても荷台外に出る。
+  // 実荷台に押しのける余地がなくても、リアゲート側の仮置きゾーンへ逃がして解消する。
+  // 機材2つでちょうど埋まる荷台なので、隣は実荷台の外（仮置きゾーン）へ押し出される。
   const cornered = makeBed(812, 700, [
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 1, y: 10, rotation: 0 },
     { id: 'p2', snapshot: snapshot('B', 400, 600, 500, 10), x: 411, y: 10, rotation: 0 }
   ]);
   eq('前提: 操作前は過不足なし', summarize(cornered, 1).invalidCount, 0);
   const r = movePlacement(cornered, 'p2', { x: 400, y: 10 }, 0, 1);
-  eq('逃げ場がなければ棄却する', r.rejected, true);
-  eq('位置は元のまま', r.placements.find((p) => p.id === 'p2').x, 411);
+  eq('実荷台に余地が無くても仮置きゾーンへ逃がして解消する', r.rejected, false);
+  eq('要求どおりの位置に置ける', r.placements.find((p) => p.id === 'p2').x, 400);
+  eq('押し出された隣は実荷台をはみ出して赤くなる',
+    summarize({ ...cornered, placements: r.placements }, 1).invalidCount, 1);
 }
 
 console.log('# 空きが無いときは置かない');
@@ -778,14 +796,16 @@ console.log('# 空きが無いときは置かない');
   eq('荷台に空きが無ければ作らない', created, null);
 }
 {
-  // 置き場は逃がし先なので、空きが無くても置ける
-  const staging = createStagingSlot();
+  // 実荷台の奥行き(500mm)には収まらなくても、幅さえ収まればリアゲート側の
+  // 仮置きゾーンに置ける。
+  const slot = makeBed(500, 500, []);
   const created = createPlacement(
-    { id: 'e1', name: '大物', width_mm: 9000, depth_mm: 9000, height_mm: 500, weight_kg: 10, color: '#ff0000' },
-    staging,
+    { id: 'e1', name: '長物', width_mm: 400, depth_mm: 600, height_mm: 500, weight_kg: 10, color: '#ff0000' },
+    slot,
     () => 'new1'
   );
-  eq('置き場は空きが無くても置ける', created?.id, 'new1');
+  eq('実荷台に収まらなくても仮置きゾーンに置ける', created?.id, 'new1');
+  eq('置かれた機材は実荷台をはみ出す', summarize({ ...slot, placements: [created] }).invalidCount, 1);
 }
 {
   const slot = makeSlot([
@@ -797,10 +817,21 @@ console.log('# 空きが無いときは置かない');
   eq('複製は元の情報を保つ', { name: copy.snapshot.name, rotation: copy.rotation }, { name: 'A', rotation: 0 });
 }
 {
+  // 実荷台に空きが無くても、幅さえ収まればリアゲート側の仮置きゾーンに複製される。
   const slot = makeBed(420, 620, [
     { id: 'p1', snapshot: snapshot('A', 400, 600, 500, 10), x: 10, y: 10, rotation: 0 }
   ]);
-  eq('空きが無ければ複製しない', duplicatePlacement(slot, 'p1', () => 'copy1'), null);
+  const copy = duplicatePlacement(slot, 'p1', () => 'copy1');
+  eq('複製はnullにならない', copy?.id, 'copy1');
+  eq('複製は実荷台をはみ出して赤くなる',
+    summarize({ ...slot, placements: [...slot.placements, copy] }).invalidCount, 1);
+}
+{
+  // 幅も収まらなければ、仮置きゾーンを使っても複製できない。
+  const slot = makeBed(400, 400, [
+    { id: 'p1', snapshot: snapshot('A', 400, 400, 500, 10), x: 0, y: 0, rotation: 0 }
+  ]);
+  eq('幅が収まらなければ複製しない', duplicatePlacement(slot, 'p1', () => 'copy1'), null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

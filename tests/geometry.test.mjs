@@ -346,7 +346,6 @@ const packed = [
 eq('5mm設定なら5mm間隔は正常', [...findInvalidShapes(packed, bed, [], 5)], []);
 eq('10mm設定にすると足りない2点が赤くなる', [...findInvalidShapes(packed, bed, [], 10)], ['a', 'b']);
 eq('1mm設定なら余裕で正常', [...findInvalidShapes(packed, bed, [], 1)], []);
-// 機材置き場は 0 を渡す。実際に重なっているものだけを見る。
 eq('0を渡すと重なりだけを見る', [...findInvalidShapes(packed, bed, [], 0)], []);
 
 // 壁との間にも設定値ぶんの隙間を要求する

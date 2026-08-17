@@ -16,12 +16,6 @@ export function translateError(error) {
     return '識別カラーの形式が正しくありません（#rrggbb で指定してください）。';
   }
 
-  // スロット0（機材置き場）は 002_staging_area.sql を適用して初めて保存できる。
-  // 「寸法を確認してください」と出すと原因を見誤るので個別に文言を分ける。
-  if (/violates check constraint .*layout_trucks_slot_check/i.test(message)) {
-    return 'レイアウトを保存できませんでした。機材置き場に対応するデータベースの更新（002_staging_area.sql）が適用されていない可能性があります。管理者にお問い合わせください。';
-  }
-
   if (/violates check constraint/i.test(message)) {
     return '入力値が許容範囲外です。寸法や重量を確認してください。';
   }

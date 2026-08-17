@@ -12,7 +12,7 @@
 
 import {
   toParts, toShape, rectToShape, boundsOf, resolveOverlaps, findInvalidShapes,
-  snapPosition, findFreeSpot, partArea,
+  snapPosition, findFreeSpot, partArea, isInsideBed,
   DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM
 } from './geometry.js';
 
@@ -35,43 +35,26 @@ function strategiesForCount(count) {
   return ARRANGEMENT_STRATEGIES;
 }
 
-// 機材置き場（ステージングエリア）の寸法。
-// 「その現場に必要な機材を先に並べてから積む」という実際の作業手順を画面上でも
-// なぞれるよう、トラックの下に常設する。マスタ登録はせず固定寸法とする。
-//
-// 荷台と同じく x = 幅方向 / y = 奥行き方向。描画時に90度回して横向きに描く
-// （renderer.js）ため、画面上では 8000mm の辺が横に伸びる。トラックと座標系を
-// 揃えておかないと、エリアをまたいでドラッグしたときに機材の向きが変わってしまう。
-export const STAGING_SLOT = 0;
-export const STAGING_WIDTH_MM = 2000;
-export const STAGING_DEPTH_MM = 8000;
+// 全トラック共通の描画・スケール基準にする奥行き(mm)。11tトラック（最大9500mm）に
+// 少し余裕を持たせてある（simulator.jsのstageStyle参照）。
+export const REFERENCE_DEPTH_MM = 10000;
 
-/** 空の機材置き場を作る。トラックが未読込でも先に機材を並べられるよう常に存在させる。 */
-export function createStagingSlot() {
-  return {
-    slot: STAGING_SLOT,
-    truckId: null,
-    truck: {
-      kind: 'staging',
-      name: '機材置き場',
-      bedWidthMm: STAGING_WIDTH_MM,
-      bedDepthMm: STAGING_DEPTH_MM,
-      // 置き場には高さ・積載重量の制限がない。null を「制限なし」として扱う。
-      bedHeightMm: null,
-      maxPayloadKg: null
-    },
-    obstacles: [],
-    placements: []
-  };
-}
-
-export function isStaging(slot) {
-  return slot?.truck?.kind === 'staging';
-}
-
-/** 荷台内寸を geometry.js が使う {w, d} 形式にする。 */
+/** 荷台内寸を geometry.js が使う {w, d} 形式にする。実寸そのもの。 */
 export function bedOf(slot) {
   return { w: slot.truck.bedWidthMm, d: slot.truck.bedDepthMm };
+}
+
+/**
+ * 移動・スナップ・空き探索・クランプに使う「作業領域」。
+ * 実際の荷台奥行きに加えて、リアゲート側にREFERENCE_DEPTH_MMまでの
+ * 仮置きスペースを確保する。実寸をはみ出した配置は bedOf() を使う
+ * summarize() 側で従来どおり赤くなる（bedOf は実寸のまま変えていない）。
+ */
+export function workingBedOf(slot) {
+  return {
+    w: slot.truck.bedWidthMm,
+    d: Math.max(slot.truck.bedDepthMm, REFERENCE_DEPTH_MM)
+  };
 }
 
 /** 障害物を当たり判定用の矩形にする。idは機材と衝突しないよう接頭辞を付ける。 */
@@ -99,15 +82,13 @@ export function placementShapes(slot) {
  * 荷台に収まる位置へ座標を丸める。壁を押しても機材が壁で止まるようにするため、
  * ドラッグ中とナッジで使う。回転後の外形で計算するので rotation を見る必要はない。
  *
- * 機材置き場は素通しする。ここは積み込み前の作業台で、収まらない機材の逃がし先を
- * 兼ねているため、壁で止めると置き場所が無くなって操作に詰まる。
+ * workingBedOf（実寸＋リアゲート側の仮置き分）を範囲にするため、実荷台をはみ出した
+ * 位置も「仮置き中」として扱われ、壁で止まらない。
  */
 export function clampToBed(placement, slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const x = Math.round(placement.x);
   const y = Math.round(placement.y);
-  if (isStaging(slot)) return { x, y };
-
-  const bed = bedOf(slot);
+  const bed = workingBedOf(slot);
   const rect = boundsOf(toParts(placement));
   return {
     x: clampAxis(x, bed.w - rect.w, clearanceMm),
@@ -127,9 +108,10 @@ function clampAxis(value, max, clearanceMm) {
 
 /**
  * 機材マスタから新しい配置を作る。
- * 荷台に空きが無ければ null を返す。重ねて仮置きすると、収まらない配置を
+ * 空きが無ければ null を返す。重ねて仮置きすると、収まらない配置を
  * 作らせないという方針に反するため、呼び出し側で「置けなかった」と伝えさせる。
- * 機材置き場だけは作業台なので、空きが無くても左前に置く。
+ * 探索範囲は workingBedOf（実荷台＋リアゲート側の仮置き分）なので、
+ * 実荷台が満杯でもリアゲート側に空きがあればそちらに置かれる。
  */
 export function createPlacement(equipment, slot, idFactory, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const draft = {
@@ -144,10 +126,9 @@ export function createPlacement(equipment, slot, idFactory, clearanceMm = DEFAUL
     rotation: 0
   };
   const free = findFreeSpot(
-    toParts(draft), placementShapes(slot), bedOf(slot), obstacleShapes(slot), clearanceMm
+    toParts(draft), placementShapes(slot), workingBedOf(slot), obstacleShapes(slot), clearanceMm
   );
-  if (!free && !isStaging(slot)) return null;
-  const spot = free ?? { x: 10, y: 10 };
+  if (!free) return null;
 
   return {
     id: idFactory(),
@@ -161,8 +142,8 @@ export function createPlacement(equipment, slot, idFactory, clearanceMm = DEFAUL
       color: equipment.color,
       shape: equipment.shape ?? null
     },
-    x: spot.x,
-    y: spot.y,
+    x: free.x,
+    y: free.y,
     rotation: 0
   };
 }
@@ -178,19 +159,18 @@ export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = D
   const free = findFreeSpot(
     toParts({ ...source, x: 0, y: 0 }),
     placementShapes(slot),
-    bedOf(slot),
+    workingBedOf(slot),
     obstacleShapes(slot),
     clearanceMm
   );
-  if (!free && !isStaging(slot)) return null;
-  const spot = free ?? { x: 10, y: 10 };
+  if (!free) return null;
 
   return {
     ...source,
     snapshot: { ...source.snapshot },
     id: idFactory(),
-    x: spot.x,
-    y: spot.y
+    x: free.x,
+    y: free.y
   };
 }
 
@@ -208,7 +188,7 @@ export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = D
  */
 export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const originals = slot?.placements ?? [];
-  if (!slot?.truck || isStaging(slot) || originals.length === 0) {
+  if (!slot?.truck || originals.length === 0) {
     return { placements: originals, status: 'unchanged', unplacedIds: [] };
   }
 
@@ -696,7 +676,7 @@ function applyMove(slot, before, placementId, position, thresholdMm, clearanceMm
   const snapped = snapPosition(
     toShape(proposed),
     others,
-    bedOf(slot),
+    workingBedOf(slot),
     thresholdMm,
     clearanceMm
   );
@@ -709,7 +689,7 @@ function applyMove(slot, before, placementId, position, thresholdMm, clearanceMm
 }
 
 /**
- * 配置を別のエリアへ移す（機材置き場 → トラック、トラック → 別のトラック など）。
+ * 配置を別のエリア（別のトラック、あるいは同じトラックのリアゲート側の仮置き分）へ移す。
  * 移動先では通常の移動と同じようにスナップと連鎖押し出しが働く。
  *
  * @returns {{source: Array, target: Array, truncated: boolean, rejected: boolean}}
@@ -779,7 +759,7 @@ function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
   const shapes = [...placementShapes(slot), ...obstacles];
   const pinnedIds = [pinnedPlacementId, ...obstacles.map((shape) => shape.id)];
 
-  const resolved = resolveOverlaps(shapes, pinnedIds, bedOf(slot), { preferredAxis, clearanceMm });
+  const resolved = resolveOverlaps(shapes, pinnedIds, workingBedOf(slot), { preferredAxis, clearanceMm });
   const byId = new Map(resolved.shapes.map((shape) => [shape.id, boundsOf(shape.parts)]));
 
   const placements = slot.placements.map((placement) => {
@@ -810,12 +790,11 @@ function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
  * ひとまとめにすると、設定を広げて全機材が赤くなった状態では、はみ出しや重なりを
  * 作る操作まで通ってしまう（どれも既に赤いので、悪化したことを検知できない）。
  *
- * 機材置き場は判定しない。積み込み前の作業台なので、収まるかどうかを
- * 問う場所ではない。
+ * ここでの判定は workingBedOf（実荷台＋リアゲート側の仮置き分）を範囲にするため、
+ * 仮置き分へ入れる操作自体は「はみ出し」として棄却されない
+ * （実荷台をはみ出したことによる赤表示は summarize() が bedOf で別途行う）。
  */
 function rejects(before, after, clearanceMm) {
-  if (isStaging(after)) return false;
-
   return (
     grew(
       invalidIdsOf(before, MIN_SETTING_CLEARANCE_MM),
@@ -835,36 +814,34 @@ function grew(before, after) {
 
 
 function invalidIdsOf(slot, clearanceMm) {
-  return findInvalidShapes(placementShapes(slot), bedOf(slot), obstacleShapes(slot), clearanceMm);
-}
-
-/**
- * エラー判定に使う隙間。機材置き場は 0（実際に重なっているものだけ赤くする）。
- * 積み込み前の作業台なので、ここで隙間を問うと画面が赤だらけになるだけで役に立たない。
- */
-function invalidGapOf(slot, clearanceMm) {
-  return isStaging(slot) ? 0 : clearanceMm;
+  return findInvalidShapes(placementShapes(slot), workingBedOf(slot), obstacleShapes(slot), clearanceMm);
 }
 
 /**
  * 集計パネル用の数値をまとめて返す。
  * 高さはパイロット版では配置計算に使わないが、荷台内寸を超える機材は件数で警告する。
+ *
+ * ここでの invalid 判定は実寸の bedOf を使う。リアゲート側の仮置き分にはみ出した
+ * 機材はここで「収まっていない」＝赤として検出される（workingBedOf ではなく
+ * bedOf を渡し続けるだけで、追加の判定コードは不要）。
  */
 export function summarize(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const bed = bedOf(slot);
   const shapes = placementShapes(slot);
-  const invalid = findInvalidShapes(shapes, bed, obstacleShapes(slot), invalidGapOf(slot, clearanceMm));
+  const invalid = findInvalidShapes(shapes, bed, obstacleShapes(slot), clearanceMm);
 
   const bedArea = bed.w * bed.d;
-  const usedArea = shapes.reduce(
-    (total, shape) => total + shape.parts.reduce((sum, part) => sum + partArea(part), 0),
-    0
-  );
+  // 配置率は実際に荷台へ積んだ床面積の割合。リアゲート側の仮置き中の機材まで
+  // 分子に含めると、積んでいないのに配置率が上がってしまうため除外する。
+  const usedArea = shapes.reduce((total, shape) => {
+    if (!isInsideBed(boundsOf(shape.parts), bed)) return total;
+    return total + shape.parts.reduce((sum, part) => sum + partArea(part), 0);
+  }, 0);
   const totalWeightKg = slot.placements.reduce(
     (total, placement) => total + (placement.snapshot.weightKg ?? 0),
     0
   );
-  // bedHeightMm が null（＝高さ制限なし。機材置き場がこれ）のときに素の比較をすると、
+  // bedHeightMm が null（＝高さ制限なし）のときに素の比較をすると、
   // null が 0 に変換されて全機材が高さ超過と判定されてしまう。明示的に除外する。
   const bedHeightMm = slot.truck.bedHeightMm;
   const overHeight =

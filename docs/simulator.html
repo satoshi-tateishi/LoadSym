@@ -54,9 +54,9 @@
     <p x-show="stateMessage" x-text="stateMessage"
        class="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 print-hidden"></p>
 
-    <p x-show="truckSlots.length === 0 && !loading" class="text-sm text-gray-500 bg-white rounded border p-6 text-center mb-3">
+    <p x-show="slots.length === 0 && !loading" class="text-sm text-gray-500 bg-white rounded border p-6 text-center mb-3">
       右の「トラック」タブから車両を選んで読み込んでください（最大3台）。<br>
-      先に下の<span class="font-bold">機材置き場</span>へ必要な機材を並べておくこともできます。
+      読み込んだ荷台のリアゲート側に、積み込み前の仮置きスペースが表示されます。
     </p>
 
     <!-- 選択中の機材の寸法。操作の対象と手札を、目線を動かさずに確かめられるよう
@@ -89,7 +89,7 @@
          space-y-3 の中に絶対配置の子を混ぜると兄弟マージンの対象になるので、外側で囲む。 -->
     <div class="relative">
       <div class="space-y-3">
-        <template x-for="slot in truckSlots" :key="slot.slot">
+        <template x-for="slot in slots" :key="slot.slot">
           <div class="bg-white rounded border p-2"
                :class="dropTarget === slot.slot ? 'ring-2 ring-blue-400'
                        : activeSlot === slot.slot ? 'ring-2 ring-blue-600' : ''"
@@ -122,10 +122,10 @@
                       :disabled="readOnly || slot.placements.length === 0"
                       @click.stop="autoArrange(slot.slot)">自動配置</button>
               <button type="button" class="text-[10px] text-red-600 hover:underline print-hidden"
-                      x-show="!readOnly" @click="removeSlot(slot.slot)">外す</button>
+                      x-show="!readOnly && slots.length > 1" @click="removeSlot(slot.slot)">削除</button>
             </div>
 
-            <svg class="simulator-stage block border border-gray-200"
+            <svg class="simulator-stage block w-full border border-gray-200"
                  :style="stageStyle(slot)" :data-slot="slot.slot"
                  @pointerdown="onStagePointerDown($event, slot)"></svg>
           </div>
@@ -143,35 +143,10 @@
                   text-sm text-amber-800 shadow-md"></p>
       </div>
     </div>
-
-    <!-- 機材置き場（トラックの下・幅いっぱい） -->
-    <template x-if="stagingSlot">
-      <div class="bg-white rounded border p-2 mt-3"
-           :class="dropTarget === stagingSlot.slot ? 'ring-2 ring-blue-400'
-                   : activeSlot === stagingSlot.slot ? 'ring-2 ring-blue-600' : ''"
-           @pointerdown="activeSlot = stagingSlot.slot">
-        <div class="flex items-center gap-3 mb-1" x-data="{ s: null }" x-effect="s = summaryOf(stagingSlot)">
-          <span class="text-xs font-bold">機材置き場</span>
-          <template x-if="s">
-            <span class="text-[11px]" :class="s.placementCount ? 'text-amber-700' : 'text-green-700'"
-                  x-text="s.placementCount
-                    ? `積み込み待ち ${s.placementCount} 点 / 合計 ${s.totalWeightKg.toLocaleString()} kg`
-                    : '積み込み待ちなし'"></span>
-          </template>
-          <span class="ml-auto text-[10px] text-gray-500 print-hidden">
-            必要な機材をここに並べてから、トラックへドラッグして積み込みます。
-          </span>
-        </div>
-
-        <svg class="simulator-stage block border border-gray-200"
-             :style="stageStyle(stagingSlot)" :data-slot="stagingSlot.slot"
-             @pointerdown="onStagePointerDown($event, stagingSlot)"></svg>
-      </div>
-    </template>
   </section>
 
   <!-- ============ 右: データ・操作タブ ============ -->
-  <aside class="w-full lg:w-96 shrink-0 print-hidden">
+  <aside class="w-full lg:w-64 shrink-0 print-hidden">
     <div class="bg-white rounded border">
       <div class="flex border-b text-sm">
         <button type="button" class="flex-1 py-2" :class="tab === 'equipments' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
@@ -207,11 +182,9 @@
                   <span class="w-3 h-3 rounded-sm shrink-0" :style="`background:${item.color}`"></span>
                   <button type="button" class="flex-1 min-w-0 text-left disabled:opacity-40"
                           :disabled="readOnly" @click="addEquipment(item)">
-                    <span class="block text-xs truncate" x-text="item.name"></span>
                     <span class="block text-[10px] text-gray-400 truncate" x-text="item.categoryName"></span>
+                    <span class="block text-xs truncate" x-text="item.name"></span>
                   </button>
-                  <span class="text-[10px] text-gray-500 tabular-nums shrink-0"
-                        x-text="`${item.width_mm}×${item.depth_mm}×${item.height_mm} / ${item.weight_kg}kg`"></span>
                   <button type="button" class="text-[10px] text-blue-600 hover:underline shrink-0"
                           x-show="canEditItem(item)" @click="openEquipmentForm(item)">編集</button>
                 </li>
@@ -239,11 +212,12 @@
             <ul class="space-y-1">
               <template x-for="item in section.items" :key="item.id">
                 <li class="flex items-center gap-2 border rounded px-2 py-1">
-                  <button type="button" class="flex-1 text-left text-xs truncate disabled:opacity-40"
-                          :disabled="slots.length >= 3 || readOnly"
-                          @click="loadTruck(item)" x-text="item.name"></button>
-                  <span class="text-[10px] text-gray-500 tabular-nums shrink-0"
-                        x-text="`${item.bed_width_mm}×${item.bed_depth_mm}×${item.bed_height_mm}`"></span>
+                  <button type="button" class="flex-1 min-w-0 text-left disabled:opacity-40"
+                          :disabled="slots.length >= 3 || readOnly" @click="loadTruck(item)">
+                    <span class="block text-xs truncate" x-text="item.name"></span>
+                    <span class="block text-[10px] text-gray-500 tabular-nums truncate"
+                          x-text="`${item.bed_width_mm}×${item.bed_depth_mm}×${item.bed_height_mm}`"></span>
+                  </button>
                   <button type="button" class="text-[10px] text-blue-600 hover:underline shrink-0"
                           x-show="canEditItem(item)" @click="openTruckForm(item)">編集</button>
                 </li>

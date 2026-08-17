@@ -19,7 +19,7 @@ import { saveLayout, loadLayout, toSlots } from '../layouts.js';
 import { createHistory } from '../history.js';
 import {
   createPlacement, movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
-  createStagingSlot, isStaging, STAGING_SLOT, clampToBed, duplicatePlacement, autoArrangeSlot
+  workingBedOf, clampToBed, duplicatePlacement, autoArrangeSlot
 } from '../packing.js';
 import { DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM, MAX_SETTING_CLEARANCE_MM }
   from '../geometry.js';
@@ -33,11 +33,6 @@ import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
 // 機材フォーム内の共有Alpineコンポーネントから参照する。
 window.shapeEditor = shapeEditor;
 
-/**
- * 荷台の表示高さの目安(px)。荷台は横向きに描くので、高さを揃えて横に伸ばす。
- * トラックを3台積み上げても1画面で見渡せる程度に抑えてある。
- */
-const TARGET_STAGE_HEIGHT = 330;
 /** スナップが効き始める画面上の距離(px)。実寸mmには描画倍率をかけて換算する。 */
 const SNAP_PIXELS = 12;
 /**
@@ -82,7 +77,7 @@ export function simulator() {
      */
     clearanceMm: DEFAULT_CLEARANCE_MM,
     clearanceRange: { min: MIN_SETTING_CLEARANCE_MM, max: MAX_SETTING_CLEARANCE_MM },
-    activeSlot: STAGING_SLOT,
+    activeSlot: null,
     selectedId: null,
     /** ドラッグ中に「ここに落ちる」と示すエリアのスロット番号。 */
     dropTarget: null,
@@ -119,7 +114,7 @@ export function simulator() {
 
         const layoutId = new URLSearchParams(window.location.search).get('layout');
         if (layoutId) await this.openLayout(layoutId);
-        else this.resetHistory([createStagingSlot()]);
+        else this.resetHistory([]);
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
@@ -209,17 +204,8 @@ export function simulator() {
 
     // ---------------- 荷台の読み込み ----------------
 
-    /** 機材置き場を除いた、実際に読み込まれているトラック。 */
-    get truckSlots() {
-      return this.slots.filter((slot) => !isStaging(slot));
-    },
-
-    get stagingSlot() {
-      return this.slots.find((slot) => isStaging(slot)) ?? null;
-    },
-
     loadTruck(truck) {
-      if (this.readOnly || this.truckSlots.length >= 3) return;
+      if (this.readOnly || this.slots.length >= 3) return;
 
       const used = new Set(this.slots.map((slot) => slot.slot));
       const slotNumber = [1, 2, 3].find((candidate) => !used.has(candidate));
@@ -254,9 +240,13 @@ export function simulator() {
       this.activeSlot = slotNumber;
     },
 
+    /** 最後の1台は削除できない。常にトラックを最低1台は保持する。 */
     removeSlot(slotNumber) {
-      if (this.readOnly) return;
+      if (this.readOnly || this.slots.length <= 1) return;
       this.commit(this.rawSlots().filter((slot) => slot.slot !== slotNumber));
+      if (this.activeSlot === slotNumber) {
+        this.activeSlot = this.slots[0]?.slot ?? null;
+      }
     },
 
     // ---------------- 機材の配置 ----------------
@@ -266,14 +256,17 @@ export function simulator() {
 
       const slots = this.rawSlots();
       const target = slots.find((slot) => slot.slot === this.activeSlot) ?? slots[0];
-      if (!target) return;
+      if (!target) {
+        this.notice('先にトラックを読み込んでください。');
+        return;
+      }
 
       const placement = createPlacement(
         equipment, target, () => crypto.randomUUID(), this.clearanceMm
       );
-      // 荷台に空きが無ければ置かない。重ねて仮置きしても収まらないことに変わりはない。
+      // リアゲート側の仮置きゾーンを含めても空きが無ければ置かない。
       if (!placement) {
-        this.notice('荷台に空きスペースがないため、配置できません。機材置き場へ置くか、配置を詰めてください。');
+        this.notice('空きスペースがないため、配置できません。配置を詰めてください。');
         return;
       }
 
@@ -598,7 +591,7 @@ export function simulator() {
 
       const slots = this.rawSlots();
       const slot = slots.find((item) => item.slot === slotNumber);
-      if (!slot || isStaging(slot) || slot.placements.length === 0) return;
+      if (!slot || slot.placements.length === 0) return;
 
       const result = autoArrangeSlot(slot, this.clearanceMm);
       if (result.status === 'failed') {
@@ -731,8 +724,7 @@ export function simulator() {
           renderTruck(svg, raw, {
             invalidIds: summarize(raw, this.clearanceMm).invalidIds,
             selectedId: this.selectedId,
-            // 機材置き場は隙間を問わない場所なので目安線も出さない（invalidGapOfと同じ理由）。
-            clearanceMm: isStaging(raw) ? 0 : this.clearanceMm
+            clearanceMm: this.clearanceMm
           });
         }
       });
@@ -742,32 +734,25 @@ export function simulator() {
       return summarize(JSON.parse(JSON.stringify(slot)), this.clearanceMm);
     },
 
-    /** テンプレートから種別を判定するための橋渡し。 */
-    isStagingSlot(slot) {
-      return isStaging(slot);
-    },
-
-    /** 保存やPNGに意味がある状態か（トラックを読んだか、置き場に機材があるか）。 */
+    /** 保存やPNGに意味がある状態か（トラックを1台でも読んでいるか）。 */
     get hasContent() {
-      return this.truckSlots.length > 0 || (this.stagingSlot?.placements.length ?? 0) > 0;
+      return this.slots.length > 0;
     },
 
     /**
      * SVGに渡すstyle。
-     * 荷台は横向きに描くので、どのエリアも「高さを揃えて横に伸ばす」形にすると
-     * 画面を使い切れる。高さを基準にすることで、トラックと機材置き場の
-     * mm/px スケールも近くなり、エリアをまたいでドラッグしたときに
-     * 機材の見た目の大きさが極端に変わらない。
+     * workingBedOf の奥行きは全トラック共通でREFERENCE_DEPTH_MM（リアゲート側の
+     * 仮置きぶんを含む）になるため、幅は常にカラムいっぱい（100%）でよい。
+     * 高さは荷台の幅から決まる縦横比なので、トラックごとに変わる。
      */
     stageStyle(slot) {
       const { w, d } = this.stageBox(slot);
-      const width = Math.round(TARGET_STAGE_HEIGHT * (w / d));
-      return `width:${width}px; max-width:100%; aspect-ratio:${w} / ${d}`;
+      return `width:100%; aspect-ratio:${w} / ${d}`;
     },
 
     /** 尺規の余白を含めた描画領域の実寸。renderer.jsのviewBoxと一致させる。 */
     stageBox(slot) {
-      const view = viewSize({ w: slot.truck.bedWidthMm, d: slot.truck.bedDepthMm });
+      const view = viewSize(workingBedOf(slot));
       return {
         w: view.w + MARGIN_MM * 2,
         d: view.d + MARGIN_MM * 2
@@ -1011,15 +996,13 @@ export function simulator() {
           '他のユーザーのレイアウトです。編集するには「別のレイアウトとして保存」してください。';
       }
 
-      // 機材置き場が導入される前に保存されたレイアウトにはスロット0が無い。
-      // 開けなくなると困るので、空の置き場を補ってから開く。
-      const slots = toSlots(row);
-      if (!slots.some((slot) => isStaging(slot))) {
-        slots.unshift(createStagingSlot());
-      }
+      // 「機材置き場」が独立したスロット（slot 0）だった頃に保存されたレイアウトが
+      // 対象の場合、そのスロットは読み込み時に無視する（トラック本体の配置には
+      // 影響しない。旧・機材置き場に仮置きしたままだった分だけ読み込まれない）。
+      const slots = toSlots(row).filter((slot) => slot.truck?.kind !== 'staging');
 
       this.resetHistory(slots);
-      this.activeSlot = this.truckSlots[0]?.slot ?? STAGING_SLOT;
+      this.activeSlot = slots[0]?.slot ?? null;
     },
 
     // ---------------- 書き出し ----------------

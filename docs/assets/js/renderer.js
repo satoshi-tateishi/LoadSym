@@ -20,7 +20,7 @@
 // 操作だけで済み、描画側は常にmmで考えればよい。
 
 import { partArea, toParts, unionOutline, offsetConvexPolygon } from './geometry.js';
-import { bedOf, obstacleRects } from './packing.js';
+import { bedOf, workingBedOf, obstacleRects } from './packing.js';
 
 /**
  * 尺規（目盛り）を描くために荷台の外側に確保する余白(mm)。
@@ -64,8 +64,10 @@ function toViewRect(bed, rect) {
  *   目安線を描く。省略時（0）は描かない。
  */
 export function renderTruck(svg, slot, options = {}) {
-  const bed = bedOf(slot);
+  const bed = workingBedOf(slot);
+  const realBed = bedOf(slot);
   const view = viewSize(bed);
+  const realView = viewSize(realBed);
   const invalidIds = options.invalidIds ?? new Set();
   const selectedId = options.selectedId ?? null;
   const clearanceMm = options.clearanceMm ?? 0;
@@ -79,19 +81,24 @@ export function renderTruck(svg, slot, options = {}) {
   // ビュー座標と荷台座標を往復するのに荷台の寸法が要る。描画のたびに要素へ控えて
   // おき、clientToBed / updatePlacementPosition から引けるようにする
   // （呼び出し側に毎回 slot を渡させるより取り違えが起きにくい）。
+  // ここでの d は workingBedOf の拡張後の値だが、drag系のコードは .w しか
+  // 使わないため実荷台の奥行きと差し替えても問題ない。
   svg.dataset.bedWidthMm = bed.w;
   svg.dataset.bedDepthMm = bed.d;
   svg.dataset.maskNamespace = `slot-${slot.slot}-${slot.id ?? 'local'}`;
 
-  // 機材置き場はトラックの荷台と取り違えないよう、破線のグレー枠にする。
-  const staging = slot.truck?.kind === 'staging';
-  const frame = staging
-    ? `<rect x="0" y="0" width="${view.w}" height="${view.d}" fill="#f8fafc" stroke="#94a3b8" stroke-width="12" stroke-dasharray="120 80"/>`
-    : `<rect x="0" y="0" width="${view.w}" height="${view.d}" fill="#ffffff" stroke="#334155" stroke-width="12"/>`;
+  // 実荷台ぶんは実線の白、リアゲート側の仮置き延長ぶんは「機材置き場」だった頃と
+  // 同じ配色（破線のグレー）にして、どこまでが本当に積める範囲かを示す。
+  const bedFrame = `<rect x="0" y="0" width="${realView.w}" height="${realView.d}" fill="#ffffff" stroke="#334155" stroke-width="12"/>`;
+  const tailgateWidth = view.w - realView.w;
+  const tailgateFrame = tailgateWidth > 0
+    ? `<rect x="${realView.w}" y="0" width="${tailgateWidth}" height="${view.d}" fill="#f8fafc" stroke="#94a3b8" stroke-width="12" stroke-dasharray="120 80"/>`
+    : '';
 
   svg.innerHTML = [
-    renderRuler(bed, staging),
-    frame,
+    renderRuler(bed, realBed),
+    bedFrame,
+    tailgateFrame,
     renderGrid(bed),
     renderObstacles(slot, bed),
     slot.placements
@@ -123,12 +130,14 @@ function renderGrid(bed) {
   return `<g class="grid">${lines.join('')}</g>`;
 }
 
-function renderRuler(bed, staging = false) {
+function renderRuler(bed, realBed) {
   const view = viewSize(bed);
+  const realView = viewSize(realBed);
   const parts = [];
   const fontSize = 110;
 
-  // 上端は奥行き方向（進行方向）。左が前、右が後ろ。
+  // 上端は奥行き方向（進行方向）。左が前、右が後ろ。リアゲート側の仮置き延長ぶんも
+  // 通して目盛りを引く。
   for (let y = 0; y <= bed.d; y += LABEL_MM) {
     parts.push(`<line x1="${y}" y1="-70" x2="${y}" y2="-20" stroke="#94a3b8" stroke-width="6"/>`);
     parts.push(
@@ -145,18 +154,25 @@ function renderRuler(bed, staging = false) {
   }
 
   // 進行方向が分かるように前方を明示する。横向きにすると前後が一目で分からないため。
-  if (!staging) {
+  parts.push(
+    `<text x="0" y="${view.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="start">◀ 前方（運転席側）</text>`
+  );
+
+  // 荷台の全体寸法。図だけ見て何tクラスか分かるように、実荷台の右端（リアゲート）に
+  // 揃えて出す（延長ぶんまで含めた見た目の右端ではない）。
+  const caption = `幅 ${realBed.w} × 奥行 ${realBed.d} mm`;
+  parts.push(
+    `<text x="${realView.w}" y="${view.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="end">${escapeXml(caption)}</text>`
+  );
+
+  // リアゲート側の仮置き延長ぶんがラベルを置けるほど広ければ、用途を示す。
+  const tailgateWidth = view.w - realView.w;
+  if (tailgateWidth >= 800) {
+    const midX = (realView.w + view.w) / 2;
     parts.push(
-      `<text x="0" y="${view.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="start">◀ 前方（運転席側）</text>`
+      `<text x="${midX}" y="${view.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="middle">仮置き（未積載）</text>`
     );
   }
-
-  // 荷台の全体寸法。図だけ見て何tクラスか分かるように隅に出す。
-  // 置き場は実車の寸法ではないので、寸法ではなく用途を書く。
-  const caption = staging ? '機材置き場（積み込み前の仮置き）' : `幅 ${bed.w} × 奥行 ${bed.d} mm`;
-  parts.push(
-    `<text x="${view.w}" y="${view.d + 150}" font-size="${fontSize}" fill="#94a3b8" text-anchor="end">${escapeXml(caption)}</text>`
-  );
 
   return `<g class="ruler" pointer-events="none">${parts.join('')}</g>`;
 }

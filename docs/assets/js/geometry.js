@@ -715,8 +715,7 @@ function movedShape(shape, dx, dy) {
  * 判定にも設定値をそのまま使う。設定を広げた瞬間に、その隙間を確保できていない
  * 機材が赤くなる。配置は動かさないので、どこを直せばよいかだけが伝わる。
  *
- * @param {number} clearanceMm 確保すべき隙間。0 を渡すと「実際に重なっているものだけ」を返す
- *   （機材置き場はこれを使う。積み込み前の作業台で、隙間を問う場所ではないため）。
+ * @param {number} clearanceMm 確保すべき隙間。0 を渡すと「実際に重なっているものだけ」を返す。
  * @returns {Set<string>} エラーになった形のidの集合
  */
 export function findInvalidShapes(shapes, bed, obstacles = [], clearanceMm = DEFAULT_CLEARANCE_MM) {
