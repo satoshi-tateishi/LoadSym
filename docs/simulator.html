@@ -17,10 +17,10 @@
 
   <!-- ============ 左: シミュレーター表示部 ============ -->
   <section class="flex-1 min-w-0 print-full">
-    <div class="flex items-center gap-2 mb-2 print-hidden">
+    <div class="flex items-center gap-2 mb-2">
       <h2 class="font-bold text-sm" x-text="layoutName || '無題のレイアウト'"></h2>
-      <span class="text-xs text-gray-500" x-show="readOnly">（読み取り専用）</span>
-      <div class="ml-auto flex items-center gap-1">
+      <span class="text-xs text-gray-500 print-hidden" x-show="readOnly">（読み取り専用）</span>
+      <div class="ml-auto flex items-center gap-1 print-hidden">
         <!-- クリアランスは吸着先とエラー判定の両方の基準。変えても配置は動かさず、
              確保できていない機材が赤くなる。 -->
         <label class="flex items-center gap-1 text-xs text-gray-600 mr-1"
