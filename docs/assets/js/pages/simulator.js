@@ -19,7 +19,7 @@ import { saveLayout, loadLayout, toSlots } from '../layouts.js';
 import { createHistory } from '../history.js';
 import {
   createPlacement, movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
-  createStagingSlot, isStaging, STAGING_SLOT, clampToBed, duplicatePlacement
+  createStagingSlot, isStaging, STAGING_SLOT, clampToBed, duplicatePlacement, autoArrangeSlot
 } from '../packing.js';
 import { DEFAULT_CLEARANCE_MM, MIN_SETTING_CLEARANCE_MM, MAX_SETTING_CLEARANCE_MM }
   from '../geometry.js';
@@ -590,6 +590,30 @@ export function simulator() {
         this.selectedId = copy.id;
         this.commit(slots);
       });
+    },
+
+    /** 指定した1台だけを一括で詰め直す。成功時は履歴上の1操作として確定する。 */
+    autoArrange(slotNumber) {
+      if (this.readOnly) return;
+
+      const slots = this.rawSlots();
+      const slot = slots.find((item) => item.slot === slotNumber);
+      if (!slot || isStaging(slot) || slot.placements.length === 0) return;
+
+      const result = autoArrangeSlot(slot, this.clearanceMm);
+      if (result.status === 'failed') {
+        this.notice('全機材を収められなかったため、配置を変更しませんでした。');
+        return;
+      }
+      if (result.status === 'unchanged') {
+        this.notice('機材は既に自動配置と同じ位置にあります。');
+        return;
+      }
+
+      slot.placements = result.placements;
+      this.selectedId = null;
+      this.commit(slots);
+      this.notice(`${slot.truck.name} の機材を自動配置しました。`);
     },
 
     // ---------------- 履歴 ----------------

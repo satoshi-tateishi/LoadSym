@@ -176,6 +176,65 @@ export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = D
 }
 
 /**
+ * 指定したトラック内の全機材を、荷台の左前から詰め直す。
+ *
+ * 最初の版では向きを勝手に変えず、現在の rotation を保つ。奥行きの大きい機材から
+ * 順に既存の空き探索へ通すことで、同程度の奥行きが近くに並ぶ単純で決定的な結果にする。
+ * 1点でも置けない、または最終検証で不正が残る場合は途中結果を破棄する。
+ *
+ * DOM・履歴・通知には触れず、入力の slot / placements も変更しない。
+ * @returns {{placements:Array, status:'arranged'|'unchanged'|'failed', unplacedIds:Array<string>}}
+ */
+export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
+  const originals = slot?.placements ?? [];
+  if (!slot?.truck || isStaging(slot) || originals.length === 0) {
+    return { placements: originals, status: 'unchanged', unplacedIds: [] };
+  }
+
+  const ordered = originals
+    .map((placement, index) => {
+      const bounds = boundsOf(toParts(placement));
+      return { placement, index, width: bounds.w, depth: bounds.d };
+    })
+    .sort((a, b) => b.depth - a.depth || b.width - a.width || a.index - b.index);
+
+  const bed = bedOf(slot);
+  const obstacles = obstacleShapes(slot);
+  const arrangedById = new Map();
+  const occupied = [];
+
+  for (const { placement } of ordered) {
+    const origin = { ...placement, x: 0, y: 0 };
+    const free = findFreeSpot(toParts(origin), occupied, bed, obstacles, clearanceMm);
+    if (!free) {
+      return { placements: originals, status: 'failed', unplacedIds: [placement.id] };
+    }
+
+    const arranged = { ...placement, x: free.x, y: free.y };
+    arrangedById.set(placement.id, arranged);
+    occupied.push(toShape(arranged));
+  }
+
+  const invalid = findInvalidShapes(occupied, bed, obstacles, clearanceMm);
+  if (invalid.size > 0) {
+    return { placements: originals, status: 'failed', unplacedIds: [...invalid] };
+  }
+
+  const placements = originals.map((placement) => arrangedById.get(placement.id));
+  const unchanged = placements.every((placement, index) =>
+    placement.x === originals[index].x &&
+    placement.y === originals[index].y &&
+    placement.rotation === originals[index].rotation
+  );
+
+  return {
+    placements: unchanged ? originals : placements,
+    status: unchanged ? 'unchanged' : 'arranged',
+    unplacedIds: []
+  };
+}
+
+/**
  * 配置を移動する。スナップを効かせたうえで、重なりを連鎖的に解消する。
  * 結果が荷台に収まらなければ移動そのものを棄却する（rejected を参照）。
  * @param {number} thresholdMm スナップの効く距離（ズーム率に応じて呼び出し側が決める）

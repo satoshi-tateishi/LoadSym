@@ -3,7 +3,7 @@
 import {
   movePlacement, movePlacementToSlot, rotatePlacement, summarize, clearances,
   createPlacement, createStagingSlot, isStaging, STAGING_SLOT,
-  clampToBed, duplicatePlacement
+  clampToBed, duplicatePlacement, autoArrangeSlot
 } from '../docs/assets/js/packing.js';
 
 let pass = 0;
@@ -43,6 +43,81 @@ const makeSlot = (placements, obstacles = []) => ({
   obstacles,
   placements
 });
+
+console.log('# autoArrangeSlot');
+{
+  const slot = makeSlot([]);
+  const result = autoArrangeSlot(slot);
+  eq('空なら変更しない', result, { placements: slot.placements, status: 'unchanged', unplacedIds: [] });
+}
+{
+  const a = { id: 'a', snapshot: snapshot('浅い', 400, 300, 500, 10), x: 700, y: 900, rotation: 0 };
+  const b = { id: 'b', snapshot: snapshot('深い', 500, 800, 500, 10), x: 100, y: 1500, rotation: 0 };
+  const slot = makeSlot([a, b]);
+  const before = JSON.stringify(slot);
+  const result = autoArrangeSlot(slot);
+  const byId = Object.fromEntries(result.placements.map((placement) => [placement.id, placement]));
+  eq('自動配置に成功', result.status, 'arranged');
+  eq('奥行きの大きい機材を左前へ置く', { x: byId.b.x, y: byId.b.y }, { x: 5, y: 5 });
+  eq('入力を破壊しない', JSON.stringify(slot), before);
+}
+{
+  const rotated = {
+    id: 'rotated', snapshot: snapshot('回転済み', 300, 700, 500, 10),
+    x: 900, y: 900, rotation: 90
+  };
+  const slot = makeSlot([rotated]);
+  const result = autoArrangeSlot(slot, 10);
+  eq('現在の回転を保つ', result.placements[0].rotation, 90);
+  eq('設定した壁クリアランスを使う',
+    { x: result.placements[0].x, y: result.placements[0].y }, { x: 10, y: 10 });
+}
+{
+  const obstacle = { id: 'tire', label: 'タイヤハウス', x: 0, y: 0, w: 600, d: 1000 };
+  const item = { id: 'item', snapshot: snapshot('ケース', 500, 500, 500, 10), x: 900, y: 900, rotation: 0 };
+  const result = autoArrangeSlot(makeSlot([item], [obstacle]));
+  eq('障害物を避ける', { x: result.placements[0].x, y: result.placements[0].y }, { x: 605, y: 5 });
+}
+{
+  const originals = [
+    { id: 'a', snapshot: snapshot('大型A', 1000, 3000, 500, 10), x: 10, y: 20, rotation: 0 },
+    { id: 'b', snapshot: snapshot('大型B', 1000, 3000, 500, 10), x: 20, y: 30, rotation: 0 }
+  ];
+  const tiny = makeSlot(originals);
+  tiny.truck.bedWidthMm = 1500;
+  tiny.truck.bedDepthMm = 3500;
+  const result = autoArrangeSlot(tiny);
+  eq('入りきらなければ失敗', result.status, 'failed');
+  eq('失敗時は元座標を保つ', result.placements, originals);
+}
+{
+  // 実動作確認と同じ11tロング（2410×9500mm）に、5種類を4点ずつ積む。
+  const types = [
+    snapshot('CL5', 1160, 405, 800, 30),
+    snapshot('BP (小)', 530, 365, 400, 30),
+    snapshot('SX300', 429, 312, 586, 18),
+    snapshot('CQ-2', 610, 675, 800, 30),
+    snapshot('LA24a-AR', 540, 700, 800, 30)
+  ];
+  const placements = Array.from({ length: 20 }, (_, index) => ({
+    id: `11t-${index + 1}`,
+    snapshot: types[index % types.length],
+    x: 50 + (index % 4) * 300,
+    y: 50 + Math.floor(index / 4) * 350,
+    rotation: 0
+  }));
+  const slot = makeSlot(placements);
+  slot.truck = {
+    name: '11t-Long-8.7尺高 (マイド車)', bedWidthMm: 2410, bedDepthMm: 9500,
+    bedHeightMm: 2660, maxPayloadKg: 11000
+  };
+  const first = autoArrangeSlot(slot);
+  const second = autoArrangeSlot(slot);
+  eq('11tに20シンボルを配置できる',
+    { status: first.status, count: first.placements.length, invalid: summarize({ ...slot, placements: first.placements }).invalidCount },
+    { status: 'arranged', count: 20, invalid: 0 });
+  eq('11tの20点配置は毎回同じ', first.placements, second.placements);
+}
 
 console.log('# summarize');
 {
