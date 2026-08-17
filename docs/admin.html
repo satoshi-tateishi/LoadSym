@@ -31,6 +31,8 @@
               @click="tab = 'templates'">テンプレート機材</button>
       <button type="button" class="px-4 py-2" :class="tab === 'import' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
               @click="tab = 'import'">CSVインポート</button>
+      <button type="button" class="px-4 py-2" :class="tab === 'backup' ? 'border-b-2 border-blue-600 font-bold' : 'text-gray-500'"
+              @click="tab = 'backup'">バックアップ</button>
     </div>
 
     <!-- ============ ユーザー ============ -->
@@ -283,6 +285,103 @@
         </template>
       </div>
     </section>
+
+    <!-- ============ バックアップ ============ -->
+    <section x-show="tab === 'backup'">
+      <p class="text-xs text-gray-500 mb-2">
+        全テーブルをJSONにまとめてDropboxへ保存し、そこから丸ごと復元します。復元は
+        <strong>保存されている内容で現在のデータを完全に置き換えます</strong>（部分復元はできません）。
+        アカウントの作成・削除は行いません（既存ユーザーのロール・表示名・無効化のみ復元されます）。
+      </p>
+
+      <div class="bg-white border rounded p-4 text-xs space-y-3">
+        <div x-show="!dropboxConnected">
+          <p class="mb-2">バックアップの保存先としてDropboxに接続します（専用のAppフォルダのみを使用）。</p>
+          <button type="button" class="px-3 py-1.5 rounded bg-blue-600 text-white disabled:opacity-50"
+                  :disabled="saving" @click="connectDropbox()">Dropboxに接続</button>
+        </div>
+
+        <div x-show="dropboxConnected" class="space-y-3">
+          <div class="flex items-center gap-3">
+            <span class="text-green-700">Dropboxに接続済みです。</span>
+            <button type="button" class="ml-auto px-3 py-1.5 rounded bg-blue-600 text-white disabled:opacity-50"
+                    :disabled="saving" @click="createBackup()">今すぐバックアップを作成</button>
+          </div>
+
+          <div x-show="lastBackup" class="border-t pt-3">
+            <p>
+              直近のバックアップ: <span x-text="lastBackup?.filename"></span>
+              （<span x-text="lastBackup?.createdAt"></span>）をDropboxへ保存しました。
+            </p>
+            <button type="button" class="mt-1 px-2 py-1 border rounded" @click="downloadLastBackup()">
+              ローカルにもダウンロード
+            </button>
+          </div>
+
+          <div class="border-t pt-3">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="font-bold">Dropbox上のバックアップ</span>
+              <button type="button" class="ml-auto px-2 py-1 border rounded" :disabled="saving"
+                      @click="refreshBackupList()">一覧を更新</button>
+            </div>
+            <table x-show="backupList.length" class="w-full bg-white border rounded text-xs">
+              <thead class="bg-gray-50 text-gray-500">
+                <tr>
+                  <th class="text-left px-2 py-2">ファイル名</th>
+                  <th class="text-left px-2 py-2">更新日時</th>
+                  <th class="px-2 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="entry in backupList" :key="entry.id">
+                  <tr class="border-t">
+                    <td class="px-2 py-1" x-text="entry.name"></td>
+                    <td class="px-2 py-1" x-text="entry.client_modified"></td>
+                    <td class="px-2 py-1 text-right">
+                      <button type="button" class="px-2 py-1 border rounded" :disabled="saving"
+                              @click="selectBackupFromDropbox(entry)">この内容で復元</button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <p x-show="!backupList.length" class="text-gray-400">バックアップはまだありません。</p>
+          </div>
+        </div>
+
+        <div class="border-t pt-3">
+          <p class="mb-1">ローカルに保存済みのバックアップJSONファイルから復元することもできます。</p>
+          <input type="file" accept="application/json" @change="selectLocalBackupFile($event)" class="text-xs">
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 復元の確認 ============ -->
+  <div x-show="restorePreview" class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+    <template x-if="restorePreview">
+      <div class="bg-white rounded p-4 w-full max-w-md text-xs space-y-3">
+        <p class="font-bold text-red-600">本当にこのバックアップで復元しますか？</p>
+        <p>
+          作成日時: <span x-text="restorePreview.payload.created_at"></span><br>
+          現在のデータはすべて削除され、以下の件数で置き換わります。この操作は元に戻せません。
+        </p>
+        <ul class="grid grid-cols-2 gap-x-3 gap-y-1 bg-gray-50 border rounded p-2">
+          <template x-for="(count, table) in restorePreview.summary" :key="table">
+            <li><span x-text="table"></span>: <span x-text="count"></span>件</li>
+          </template>
+        </ul>
+        <label class="block">
+          確認のため「復元」と入力してください。
+          <input type="text" x-model="restoreConfirmText" class="mt-1 w-full border rounded px-2 py-1">
+        </label>
+        <div class="flex gap-2 pt-1">
+          <button type="button" class="flex-1 bg-red-600 text-white rounded py-2 disabled:opacity-50"
+                  :disabled="saving || restoreConfirmText !== '復元'" @click="confirmRestore()">復元する</button>
+          <button type="button" class="px-4 border rounded" @click="restorePreview = null">キャンセル</button>
+        </div>
+      </div>
+    </template>
   </div>
 
   <!-- ============ カテゴリフォーム ============ -->

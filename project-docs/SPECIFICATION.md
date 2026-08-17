@@ -624,6 +624,7 @@ Supabase CLI は使わず、`project-docs/sql/` に `NNN_snake_case_description.
 | カテゴリ | 機材カテゴリの追加・名前変更・並び替え・削除（5.4節） |
 | テンプレート機材 | 共通テンプレート（`user_id = null`）の CRUD と**並び替え**。よく使う機材を上に集めておくと、シミュレーターの機材リストからも探しやすくなる |
 | CSVインポート | 機材リストの一括登録 |
+| バックアップ | 全テーブルのバックアップ作成（Dropbox保存）・復元（11章） |
 
 ユーザー一覧の更新で RLS に弾かれた場合、PostgREST は権限不足でもエラーではなく 0 件更新を返す。
 成功したように見えるのを避けるため、クライアント側で 0 件を明示的に失敗として扱う。
@@ -640,3 +641,32 @@ Supabase CLI は使わず、`project-docs/sql/` に `NNN_snake_case_description.
 | レイアウトを非公開（本人のみ）とする | 社内ツールであり、他人の組み方を参考にできる価値のほうが大きい（8.1節） |
 | 管理画面からアカウントを新規作成する | `auth.admin.createUser` は **`service_role` キー**を必要とする。LoadSym は静的サイトで JS がそのままブラウザへ配信され、しかもリポジトリが public なため、このキーを置くと RLS による保護が全て無効になる。実現するには service_role を Secret として持つ **Supabase Edge Function** が必要で、GitHub Pages 以外にデプロイ先が増える。社内利用でユーザー数が少なくアカウント作成の頻度も低いため、パイロット版ではダッシュボードでの作成を継続する。ユーザー削除も同じ理由でアプリからは行わず、`disabled` フラグで代替する |
 | 誰でもサインアップできるようにして Admin が承認する | Edge Function は不要になるが、anon key は公開されているため第三者が無制限に `auth.users` の行を作れてしまう。「管理者が事前に作成・配付する」という運用方針とも合わない |
+| バックアップ・復元を service_role キーや Supabase Edge Function で実装する | 9章と同じ理由（public リポジトリの静的サイトに service_role を置けない）。既存の `admin_list_users()` と同じ「security definer 関数 + 関数内で Admin 判定」のパターンだけで、追加インフラなしに実現できる（11章） |
+
+## 11. バックアップ・復元（Admin専用）
+
+Supabase 無料プランには自動バックアップの仕組みがなく、誤操作・CSV誤インポート等からの復旧手段がなかった。
+管理画面（`docs/admin.html`）に「バックアップ」タブを追加し、**Admin のみ**が全テーブルのバックアップ作成・復元を行えるようにする。
+
+- **バックアップ（読み取り）**: 対象8テーブル（`equipment_categories` / `equipments` / `trucks` /
+  `truck_obstacles` / `layouts` / `layout_trucks` / `placements` / `profiles`）を1本の JSON に
+  まとめる。Admin は既存 RLS（`profiles_select_admin` 含む）で全テーブルを読めるため、
+  クライアント側の SELECT だけで完結し、service_role キーは不要。
+- **保存先は Dropbox**（App フォルダのみにアクセスするアプリを利用）。認証は
+  **PKCE OAuth**（App key のみで secret 不要）で、ブラウザだけで完結する。トークンは
+  管理者本人のブラウザの `localStorage` に保存する（supabase-js のセッション管理と同じ方針）。
+  Dropbox 未接続時・トークン失効時のために、作成直後のバックアップをローカルにダウンロードする
+  導線と、ローカルの JSON ファイルから復元する導線も用意する。
+- **復元（書き込み）**: RLS では他ユーザーの `user_id` 行を書けないため、`admin_list_users()`
+  と同じ **security definer RPC** `admin_restore_backup(payload jsonb)`（`009_backup_restore.sql`）
+  を使う。関数内で `current_user_role() = 'Admin'` を確認したうえで RLS をバイパスし、
+  全テーブルを**丸ごと洗い替える**（部分復元は提供しない。運用がシンプルであることを優先した）。
+  1回の関数呼び出しなのでアトミックに実行される（失敗時は自動的に全体がロールバックする）。
+- **`profiles` は削除・挿入せず、既存ユーザー行の `role` / `display_name` / `disabled` を
+  UPDATE するだけ**にする。`auth.users` は一切操作しない。アカウントの新規作成・削除は
+  10章の既存方針どおりダッシュボード作業のままで、アプリから行うことはできない。
+- **対象は同一 Supabase プロジェクト内での巻き戻し**（誤操作・破損からの復旧）に限定する。
+  新規 Supabase プロジェクトへのフルディザスタリカバリは `auth.users` の UUID が
+  変わってしまうため対象外（`equipments.user_id` 等の参照が壊れる）。
+- 自動（cron）でのバックアップは行わず、**Admin がボタンを押した時の手動バックアップ**のみとする
+  （利用者30人規模の社内ツールであり、運用をシンプルに保つことを優先した）。

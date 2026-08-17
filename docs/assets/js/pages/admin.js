@@ -15,6 +15,12 @@ import {
   updateEquipmentOrder
 } from '../equipments.js';
 import { readTextFile, parseCsv, toEquipmentRows, EQUIPMENT_CSV_HEADERS } from '../csv.js';
+import { exportBackup, restoreBackup, backupSummary, backupFilename } from '../backup.js';
+import {
+  connect as dropboxConnect, isConnected as dropboxIsConnected,
+  uploadJson as dropboxUpload, listBackups as dropboxListBackups,
+  downloadJson as dropboxDownloadJson
+} from '../dropbox-client.js';
 import { PALETTE, PALETTE_SHADES, paletteToCsv } from '../palette.js';
 import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
 import {
@@ -59,6 +65,12 @@ export function admin() {
     equipmentForm: null,
     importPreview: null,
 
+    dropboxConnected: false,
+    lastBackup: null,
+    backupList: [],
+    restorePreview: null,
+    restoreConfirmText: '',
+
     equipmentFormLabel: 'テンプレート機材',
     showTemplateOwnershipControl: false,
 
@@ -93,8 +105,15 @@ export function admin() {
         return;
       }
 
+      // dropbox-callback.html からの戻り先。接続直後にバックアップタブを開けるようにする。
+      if (new URLSearchParams(window.location.search).get('tab') === 'backup') {
+        this.tab = 'backup';
+      }
+      this.dropboxConnected = dropboxIsConnected();
+
       try {
         await this.reload();
+        if (this.dropboxConnected) await this.refreshBackupList();
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
@@ -413,6 +432,96 @@ export function admin() {
         await this.reload();
         this.noticeMessage = `${rows.length} 件のテンプレート機材を取り込みました。`;
         this.importPreview = null;
+      });
+    },
+
+    // ---------------- バックアップ・復元 ----------------
+
+    async connectDropbox() {
+      this.errorMessage = '';
+      try {
+        // Dropboxの認可画面へ遷移する（このページを離れる）。
+        await dropboxConnect();
+      } catch (error) {
+        console.error(error);
+        this.errorMessage = translateError(error);
+      }
+    },
+
+    async createBackup() {
+      this.noticeMessage = '';
+      await withSaving(this, async () => {
+        const payload = await exportBackup();
+        const filename = backupFilename(payload.created_at);
+        await dropboxUpload(filename, JSON.stringify(payload));
+        this.lastBackup = { filename, createdAt: payload.created_at, payload };
+        this.noticeMessage = `バックアップ「${filename}」をDropboxへ保存しました。`;
+        await this.refreshBackupList();
+      });
+    },
+
+    /** Dropboxとは別に、作成直後のバックアップをローカルにも保存できるようにする。 */
+    downloadLastBackup() {
+      if (!this.lastBackup) return;
+      const blob = new Blob([JSON.stringify(this.lastBackup.payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = this.lastBackup.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    },
+
+    async refreshBackupList() {
+      await withSaving(this, async () => {
+        this.backupList = await dropboxListBackups();
+      });
+    },
+
+    async selectBackupFromDropbox(entry) {
+      await withSaving(this, async () => {
+        const payload = await dropboxDownloadJson(entry.path_lower ?? `/${entry.name}`);
+        this.openRestorePreview(payload);
+      });
+    },
+
+    /** Dropbox未接続時や手元にファイルがある場合の代替経路。 */
+    async selectLocalBackupFile(event) {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+
+      this.errorMessage = '';
+      try {
+        const payload = JSON.parse(await file.text());
+        this.openRestorePreview(payload);
+      } catch (error) {
+        console.error(error);
+        this.errorMessage = 'バックアップファイルを読み込めませんでした。JSON形式を確認してください。';
+      }
+    },
+
+    openRestorePreview(payload) {
+      if (payload?.schema_version !== 1) {
+        this.errorMessage = 'このファイルはLoadSymのバックアップ形式ではありません。';
+        return;
+      }
+      this.errorMessage = '';
+      this.restoreConfirmText = '';
+      this.restorePreview = { payload, summary: backupSummary(payload) };
+    },
+
+    /** 全テーブルを丸ごと洗い替える復元。取り消せないため、確認テキストの入力を必須にしてある。 */
+    async confirmRestore() {
+      if (this.restoreConfirmText !== '復元') return;
+      await withSaving(this, async () => {
+        const counts = await restoreBackup(this.restorePreview.payload);
+        this.restorePreview = null;
+        await this.reload();
+        const summary = Object.entries(counts).map(([table, n]) => `${table}: ${n}件`).join(' / ');
+        this.noticeMessage = `復元が完了しました（${summary}）。`;
       });
     }
   };

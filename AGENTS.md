@@ -40,6 +40,7 @@ HTMLにクエリを付けるだけでは不十分で、モジュール自体を�
 
 動作確認用のログイン情報はリポジトリ直下の`test-account.json`（gitignore済み、非公開）を参照。
 ロールごとの権限差分を確認する際は、Admin/Editor/Viewerの各アカウントでログインして比較すること。
+同ファイルの`dropbox_app_key`に、バックアップ機能（Admin画面）の動作確認で使うDropbox App keyを記載している。
 
 ## Tailwind CSS
 
@@ -68,3 +69,8 @@ npm run build:vendor
 
 `docs/assets/js/supabase-config.js`に書けるのはSupabaseの**anon key のみ**（クライアントに埋め込まれる前提のキーで、
 保護はRLSが担う）。`service_role`キーやパスワードの類は絶対にコミットしないこと。
+
+同様に`docs/assets/js/dropbox-config.js`に書けるのはDropboxの**App key（PKCE用のclient_id）のみ**。
+PKCE（OAuth 2.0 with PKCE）を使う公開クライアントはsecretを必要としないため、App keyは
+クライアントに埋め込んでよい非秘匿値（anon keyと同じ位置づけ）。Dropboxの`App secret`は
+絶対にコミットしないこと（そもそもPKCEフローでは使わない）。
