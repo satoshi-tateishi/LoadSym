@@ -12,7 +12,7 @@ import { listLayouts, listOwnerNames, deleteLayout, renameLayout, loadLayout, sa
 import { renderTruck } from '../renderer.js';
 import { summarize } from '../packing.js';
 import { DEFAULT_CLEARANCE_MM } from '../geometry.js';
-import { downloadSvgAsJpeg } from '../export-png.js';
+import { downloadTruckImagesAsJpeg } from '../export-png.js';
 
 /**
  * 1ユーザーが保存できるレイアウトの上限。担保は DB トリガ（006_layout_limit.sql）で、
@@ -96,37 +96,45 @@ export function layoutList() {
     // モバイルでは一覧上での編集もシミュレーターへの遷移も不可のため、
     // 画面には出さない<svg>を作ってその場でJPGを書き出す（simulator.jsの
     // renderAll()と同じ手順を、Alpineの状態を介さず直接呼んでいるだけ）。
+    // レイアウトに含まれる全トラック（最大3台）を1枚のJPGにまとめる。
     async exportJpg(layout) {
       await withSaving(this, async () => {
         const row = await loadLayout(layout.id);
-        const slot = toSlots(row).find((item) => item.truck?.kind !== 'staging');
-        if (!slot) return;
+        const slots = toSlots(row).filter((item) => item.truck?.kind !== 'staging');
+        if (slots.length === 0) return;
 
         const clearanceMm = row.clearance_mm ?? DEFAULT_CLEARANCE_MM;
-        const raw = JSON.parse(JSON.stringify(slot));
-
-        // widthとheightを指定しないと、幅/高さのないreplace要素として扱われ、
-        // viewBox（実寸mm）がそのままCSS pxのボックスサイズとして使われてしまう
-        // （荷台1台分は数千mm四方あり、left:-9999pxだけでは右端が画面内に
-        // はみ出す）。1pxに固定して、どんな寸法の荷台でも画面外に収まるようにする。
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.style.position = 'fixed';
-        svg.style.left = '-9999px';
-        svg.style.top = '-9999px';
-        svg.style.width = '1px';
-        svg.style.height = '1px';
-        svg.style.opacity = '0';
-        svg.style.pointerEvents = 'none';
-        document.body.appendChild(svg);
+        // renderTruck実行前にpushしておく。途中（例: 3台中2台目）で例外が出ても、
+        // すでにDOMへ追加済みの<svg>をfinallyで確実に除去するため。
+        const createdSvgs = [];
 
         try {
-          renderTruck(svg, raw, { invalidIds: summarize(raw, clearanceMm).invalidIds, clearanceMm });
+          const entries = slots.map((slot) => {
+            const raw = JSON.parse(JSON.stringify(slot));
+
+            // widthとheightを指定しないと、幅/高さのないreplace要素として扱われ、
+            // viewBox（実寸mm）がそのままCSS pxのボックスサイズとして使われてしまう
+            // （荷台1台分は数千mm四方あり、left:-9999pxだけでは右端が画面内に
+            // はみ出す）。1pxに固定して、どんな寸法の荷台でも画面外に収まるようにする。
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.style.position = 'fixed';
+            svg.style.left = '-9999px';
+            svg.style.top = '-9999px';
+            svg.style.width = '1px';
+            svg.style.height = '1px';
+            svg.style.opacity = '0';
+            svg.style.pointerEvents = 'none';
+            document.body.appendChild(svg);
+            createdSvgs.push(svg);
+
+            renderTruck(svg, raw, { invalidIds: summarize(raw, clearanceMm).invalidIds, clearanceMm });
+            return { svg, label: slot.truck.name };
+          });
 
           const base = (row.name || 'loadsym').replace(/[\\/:*?"<>|]/g, '_');
-          const title = `${row.name || '無題のレイアウト'} : ${slot.truck.name}`;
-          await downloadSvgAsJpeg(svg, `${base}_${slot.truck.name}.jpg`, title);
+          await downloadTruckImagesAsJpeg(entries, base, row.name || '無題のレイアウト');
         } finally {
-          svg.remove();
+          createdSvgs.forEach((svg) => svg.remove());
         }
       });
     },

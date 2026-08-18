@@ -27,7 +27,7 @@ import {
   renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM, viewSize,
   showDropGhost, clearDropGhost, dimPlacement
 } from '../renderer.js';
-import { downloadSvgAsJpeg } from '../export-png.js';
+import { downloadTruckImagesAsJpeg } from '../export-png.js';
 import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
 import {
   defaultCategoryIdOf, categoryDefaultColorOf, emptyEquipmentDraft, buildEquipmentValues
@@ -974,14 +974,18 @@ export function simulator() {
 
     async exportPng() {
       try {
-        const slot = this.slots.find((item) => item.slot === this.activeSlot) ?? this.slots[0];
-        if (!slot) return;
-        const svg = document.querySelector(`svg[data-slot="${slot.slot}"]`);
-        if (!svg) return;
+        // アクティブなスロットだけでなく、読み込んでいる全トラック（最大3台）を
+        // 1枚のJPGにまとめる。this.slotsは常にslot番号順（唯一の真実）。
+        const entries = this.slots
+          .map((slot) => ({
+            svg: document.querySelector(`svg[data-slot="${slot.slot}"]`),
+            label: slot.truck.name
+          }))
+          .filter((entry) => entry.svg);
+        if (entries.length === 0) return;
 
         const base = (this.layoutName || 'loadsym').replace(/[\\/:*?"<>|]/g, '_');
-        const title = `${this.layoutName || '無題のレイアウト'} : ${slot.truck.name}`;
-        await downloadSvgAsJpeg(svg, `${base}_${slot.truck.name}.jpg`, title);
+        await downloadTruckImagesAsJpeg(entries, base, this.layoutName || '無題のレイアウト');
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
