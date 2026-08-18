@@ -598,6 +598,9 @@ export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
       if (!displacement) continue;
 
       translateShape(target, displacement.dx, displacement.dy);
+      // 一度決めた軸を固定して往復振動を防ぐ。密集時に別軸しか空いていない場合は
+      // 解消できないことがあるが、呼び出し側の最終検証が操作全体を棄却するため、
+      // 不正な配置を確定させることはない。利用者報告が出るまでは安全性を優先する。
       pushDirection.set(target.id, displacement.axis);
       moved = true;
       queue.push(target.id);

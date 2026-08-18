@@ -186,9 +186,13 @@ export function admin() {
     async saveCategory() {
       await withSaving(this, async () => {
         const form = this.categoryForm;
+        const current = form.id
+          ? this.categories.find((category) => category.id === form.id)
+          : null;
         const values = {
           name: form.name.trim(),
-          sort_order: form.sort_order ?? 0,
+          // 編集では現在値を維持し、新規は既存最大値+10。変更経路は一覧の並び替えだけにする。
+          sort_order: current?.sort_order ?? nextSortOrder(this.categories),
           default_color: form.default_color
         };
 
@@ -409,7 +413,15 @@ export function admin() {
         const text = await readTextFile(file);
         const rows = parseCsv(text);
         const byName = new Map(this.categories.map((category) => [category.name, category.id]));
-        const result = toEquipmentRows(rows, byName, this.defaultCategoryId);
+        const fallbackCategory = this.categories.find(
+          (category) => category.id === this.defaultCategoryId
+        );
+        const result = toEquipmentRows(
+          rows,
+          byName,
+          this.defaultCategoryId,
+          fallbackCategory?.name ?? '未分類'
+        );
 
         this.importPreview = {
           fileName: file.name,

@@ -117,8 +117,9 @@ export const EQUIPMENT_CSV_HEADERS = [
  * @param {Array<Array<string>>} rows parseCsvの結果
  * @param {Map<string,string>} categoryIdByName カテゴリ名 → id
  * @param {string} fallbackCategoryId カテゴリ未指定・不明のときに使うid
+ * @param {string} fallbackCategoryName 実際にフォールバックするカテゴリ名
  */
-export function toEquipmentRows(rows, categoryIdByName, fallbackCategoryId) {
+export function toEquipmentRows(rows, categoryIdByName, fallbackCategoryId, fallbackCategoryName) {
   if (rows.length === 0) {
     return { header: [], items: [], errors: ['CSVが空です。'] };
   }
@@ -174,7 +175,9 @@ export function toEquipmentRows(rows, categoryIdByName, fallbackCategoryId) {
     if (categoryName) {
       const matched = categoryIdByName.get(categoryName);
       if (matched) categoryId = matched;
-      else problems.push(`カテゴリ「${categoryName}」が見つかりません（その他として取り込みます）`);
+      else problems.push(
+        `カテゴリ「${categoryName}」が見つかりません（「${fallbackCategoryName}」として取り込みます）`
+      );
     }
 
     const colorRaw = value('color');
@@ -195,7 +198,7 @@ export function toEquipmentRows(rows, categoryIdByName, fallbackCategoryId) {
     return {
       lineNumber,
       name,
-      categoryName: categoryName || '（その他）',
+      categoryName: categoryName || `（${fallbackCategoryName}）`,
       values: {
         name,
         category_id: categoryId,

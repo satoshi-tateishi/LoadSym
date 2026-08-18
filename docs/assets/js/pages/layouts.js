@@ -170,7 +170,12 @@ export function layoutList() {
       await withSaving(this, async () => {
         const row = await loadLayout(layout.id);
         const name = `${row.name} のコピー`;
-        const id = await saveLayout({ name, note: row.note, slots: toSlots(row) }, this.session.user.id);
+        const id = await saveLayout({
+          name,
+          note: row.note,
+          clearanceMm: row.clearance_mm ?? DEFAULT_CLEARANCE_MM,
+          slots: toSlots(row)
+        }, this.session.user.id);
         await this.reload();
         this.noticeMessage = `「${name}」として複製しました。`;
         window.location.href = `./simulator.html?layout=${encodeURIComponent(id)}`;

@@ -61,6 +61,8 @@ export function simulator() {
 
     session: null,
     profile: null,
+    /** Viewerロール由来の読み取り専用。所有者不一致とは分けて保存可否に使う。 */
+    roleReadOnly: false,
     readOnly: false,
 
     tab: 'equipments',
@@ -119,7 +121,8 @@ export function simulator() {
       this.session = context.session;
       this.profile = context.profile;
       // Viewerは配置操作も保存もできない。閲覧専用として開く。
-      this.readOnly = !canEdit(context.profile);
+      this.roleReadOnly = !canEdit(context.profile);
+      this.readOnly = this.roleReadOnly;
       this.history = createHistory([]);
 
       try {
@@ -360,14 +363,29 @@ export function simulator() {
         updateGhost(moveEvent.clientX, moveEvent.clientY, this.dropTarget);
       };
 
-      const onUp = (upEvent) => {
-        svg.releasePointerCapture(event.pointerId);
+      const finishDrag = () => {
+        if (svg.hasPointerCapture(event.pointerId)) {
+          svg.releasePointerCapture(event.pointerId);
+        }
         svg.removeEventListener('pointermove', onMove);
         svg.removeEventListener('pointerup', onUp);
-        svg.removeEventListener('pointercancel', onUp);
+        svg.removeEventListener('pointercancel', onCancel);
         this.dropTarget = null;
         if (ghostSvg) clearDropGhost(ghostSvg);
         dimPlacement(svg, placementId, false);
+      };
+
+      const onCancel = () => {
+        finishDrag();
+        // OS操作などによる強制中断では終点を信用せず、必ず掴む前の位置へ戻す。
+        placement.x = start.x;
+        placement.y = start.y;
+        this.slots = slots;
+        this.renderAll();
+      };
+
+      const onUp = (upEvent) => {
+        finishDrag();
 
         if (!moved) {
           this.renderAll();
@@ -415,7 +433,7 @@ export function simulator() {
 
       svg.addEventListener('pointermove', onMove);
       svg.addEventListener('pointerup', onUp);
-      svg.addEventListener('pointercancel', onUp);
+      svg.addEventListener('pointercancel', onCancel);
     },
 
     /** 画面座標の真下にあるエリアのスロット番号。エリア外なら null。 */
@@ -487,6 +505,7 @@ export function simulator() {
 
       const meta = event.ctrlKey || event.metaKey;
       if (meta && event.key.toLowerCase() === 'z') {
+        if (this.readOnly) return;
         event.preventDefault();
         if (event.shiftKey) this.redo();
         else this.undo();
@@ -918,15 +937,23 @@ export function simulator() {
     // ---------------- レイアウトの保存・読み込み ----------------
 
     openSaveDialog() {
-      this.saveDialog = { name: this.layoutName, note: this.layoutNote, asNew: false };
+      if (this.roleReadOnly || !this.hasContent) return;
+      this.saveDialog = {
+        name: this.layoutName,
+        note: this.layoutNote,
+        // 他人のレイアウトはRLSで上書きできないため、必ず自分名義の新規行にする。
+        asNew: this.layoutOwnerId !== null && this.layoutOwnerId !== this.session.user.id
+      };
     },
 
     async saveLayoutNow() {
       await withSaving(this, async () => {
         const dialog = this.saveDialog;
+        const ownedByAnother = this.layoutOwnerId !== null &&
+          this.layoutOwnerId !== this.session.user.id;
         const id = await saveLayout(
           {
-            id: dialog.asNew ? undefined : this.layoutId ?? undefined,
+            id: dialog.asNew || ownedByAnother ? undefined : this.layoutId ?? undefined,
             name: dialog.name,
             note: dialog.note,
             clearanceMm: this.clearanceMm,
@@ -939,6 +966,13 @@ export function simulator() {
         this.layoutName = dialog.name;
         this.layoutNote = dialog.note;
         this.layoutOwnerId = this.session.user.id;
+        this.readOnly = this.roleReadOnly;
+        this.stateMessage = '';
+        window.history.replaceState(
+          null,
+          '',
+          `./simulator.html?layout=${encodeURIComponent(id)}`
+        );
         this.saveDialog = null;
         this.notice('保存しました。');
       });
@@ -953,12 +987,16 @@ export function simulator() {
       // 004以前に保存されたレイアウトには列が無いので既定値で開く。
       this.clearanceMm = this.normalizeClearance(row.clearance_mm ?? DEFAULT_CLEARANCE_MM);
 
-      // 他人のレイアウトは編集できない（RLSでも弾かれる）。読み取り専用で開く。
-      if (row.user_id !== this.session.user.id) {
-        this.readOnly = true;
+      // 他人のレイアウトは配置を編集できない（RLSでも弾かれる）が、Editor/Adminは
+      // 自分名義の新規レイアウトとして保存できる。Viewerはロール由来で保存もできない。
+      const ownedByAnother = row.user_id !== this.session.user.id;
+      this.readOnly = this.roleReadOnly || ownedByAnother;
+      if (ownedByAnother) {
         // これは操作の結果ではなく画面の状態なので、消えないほうを使う。
         this.stateMessage =
           '他のユーザーのレイアウトです。編集するには「別のレイアウトとして保存」してください。';
+      } else {
+        this.stateMessage = '';
       }
 
       // 「機材置き場」が独立したスロット（slot 0）だった頃に保存されたレイアウトが

@@ -1,7 +1,7 @@
 // shape-editor.js の保存前正規化と入力検証の回帰テスト。
 // ブラウザ向けのESMをNodeからそのまま読み、既存テストと同じ小さなハーネスで実行する。
 
-import { prepareEquipmentShape } from '../docs/assets/js/shape-editor.js';
+import { prepareEquipmentShape, shapeEditor } from '../docs/assets/js/shape-editor.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -96,6 +96,68 @@ console.log('# prepareEquipmentShape');
     { kind: 'circle', cx: 100, cy: 100, r: 80 },
     { kind: 'rect', x: 150, y: 50, w: 100, d: 100 }
   ])), /パーツ 1 と 2/);
+}
+
+console.log('\n# shapeEditor cancel/apply');
+{
+  const target = form([
+    { kind: 'rect', x: 0, y: 0, w: 600, d: 400 },
+    { kind: 'rect', x: 600, y: 0, w: 200, d: 200 }
+  ], 800, 400);
+  const editor = shapeEditor(target);
+  editor.openEditor();
+  editor.removePart(1);
+  editor.closeEditor();
+  eq('閉じるとshapeと外形寸法を編集前へ戻す', target, form([
+    { kind: 'rect', x: 0, y: 0, w: 600, d: 400 },
+    { kind: 'rect', x: 600, y: 0, w: 200, d: 200 }
+  ], 800, 400));
+}
+{
+  const target = { width_mm: 600, depth_mm: 400, shape: null };
+  const editor = shapeEditor(target);
+  editor.openEditor();
+  editor.updatePart(0, 'w', 800);
+  editor.apply();
+  eq('形を反映すると編集後の外形寸法を保持する', target, {
+    width_mm: 800, depth_mm: 400, shape: null
+  });
+}
+{
+  const target = { width_mm: 600, depth_mm: 400, shape: null };
+  const editor = shapeEditor(target);
+  editor.tool = 'polygon';
+  editor.openEditor();
+  eq('開くとツールを選択へ戻す', editor.tool, 'select');
+  editor.tool = 'polygon';
+  editor.closeEditor();
+  eq('閉じるとツールを選択へ戻す', editor.tool, 'select');
+}
+{
+  const target = { width_mm: 600, depth_mm: 400, shape: null };
+  const editor = shapeEditor(target);
+  editor.openEditor();
+  editor.chamfers = [50, 60, 70, 80];
+  editor.drag = {
+    kind: 'chamfer',
+    index: 0,
+    corner: 2,
+    original: { kind: 'rect', x: 0, y: 0, w: 600, d: 400 }
+  };
+  editor.point = () => ({ x: 500, y: 300 });
+  editor.pointerMove({});
+  eq('角落としドラッグで他3隅の値を保持する', editor.chamfers, [50, 60, 100, 80]);
+}
+{
+  const target = form([{ kind: 'polygon', points: [
+    { x: 0, y: 0 }, { x: 7, y: 3 }, { x: 0, y: 10 }
+  ] }], 7, 10);
+  const editor = shapeEditor(target);
+  editor.openEditor();
+  editor.insertVertex(0, 0);
+  eq('斜辺では丸めず共線の中点を追加する', editor.parts[0].points[1], { x: 3.5, y: 1.5 });
+  editor.apply();
+  eq('斜辺の中点を形の反映後も保持する', target.shape.parts[0].points[1], { x: 3.5, y: 1.5 });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

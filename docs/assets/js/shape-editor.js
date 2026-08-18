@@ -128,7 +128,9 @@ export function prepareEquipmentShape(form) {
     }
     if (source?.kind === 'polygon') {
       const points = Array.isArray(source.points)
-        ? source.points.map((point) => ({ x: roundMm(point.x), y: roundMm(point.y) })) : [];
+        // 斜辺へ追加した厳密な中点は0.5mmになる場合がある。整数へ丸めると辺から外れて
+        // 凸判定を壊すため、多角形の頂点だけは有限な実数をそのまま保持する。
+        ? source.points.map((point) => ({ x: Number(point.x), y: Number(point.y) })) : [];
       if (points.length < 3 || points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
         throw new Error('多角形パーツには3点以上の頂点を指定してください。');
       }
@@ -184,6 +186,8 @@ export function shapeEditor(form) {
     form,
     open: false,
     tool: 'select',
+    /** 「閉じる」で戻す、エディタを開いた時点のフォーム値。 */
+    formSnapshot: null,
     parts: [],
     selectedIndex: null,
     draft: null,
@@ -417,6 +421,11 @@ export function shapeEditor(form) {
     },
 
     openEditor() {
+      this.formSnapshot = {
+        shape: this.form.shape === null ? null : clone(this.form.shape),
+        width_mm: this.form.width_mm,
+        depth_mm: this.form.depth_mm
+      };
       this.parts = editableParts(
         this.form.shape,
         Number(this.form.width_mm),
@@ -424,6 +433,7 @@ export function shapeEditor(form) {
       );
       this.selectedIndex = null;
       this.activeVertex = null;
+      this.tool = 'select';
       // 前の機材のズームは持ち越さない。開いた直後は常に既定の 2000×1000 から始める。
       this.zoomIndex = DEFAULT_ZOOM_INDEX;
       this.cancelPolygon();
@@ -433,11 +443,20 @@ export function shapeEditor(form) {
     },
 
     closeEditor() {
+      if (this.formSnapshot) {
+        this.form.shape = this.formSnapshot.shape === null
+          ? null
+          : clone(this.formSnapshot.shape);
+        this.form.width_mm = this.formSnapshot.width_mm;
+        this.form.depth_mm = this.formSnapshot.depth_mm;
+      }
       this.open = false;
+      this.tool = 'select';
       this.drag = null;
       this.draft = null;
       this.activeVertex = null;
       this.cancelPolygon();
+      this.formSnapshot = null;
     },
 
     chooseTool(tool) {
@@ -617,7 +636,8 @@ export function shapeEditor(form) {
 
       if (drag.kind === 'chamfer') {
         const part = drag.original;
-        const amounts = [0, 0, 0, 0];
+        // 入力済みの他3隅は保持し、ドラッグ中の隅だけを更新する。
+        const amounts = [...this.chamfers];
         amounts[drag.corner] = Math.max(
           0,
           Math.min(
@@ -806,11 +826,13 @@ export function shapeEditor(form) {
 
       const a = part.points[edge];
       const b = part.points[(edge + 1) % part.points.length];
+      const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const rounded = { x: roundMm(midpoint.x), y: roundMm(midpoint.y) };
+      // 丸め後も外積が0なら扱いやすい整数座標を使い、斜辺から外れるときだけ正確な中点を使う。
+      const insertion = (rounded.x - a.x) * (b.y - a.y) ===
+        (rounded.y - a.y) * (b.x - a.x) ? rounded : midpoint;
       const candidate = clone(part);
-      candidate.points.splice(edge + 1, 0, {
-        x: roundMm((a.x + b.x) / 2),
-        y: roundMm((a.y + b.y) / 2)
-      });
+      candidate.points.splice(edge + 1, 0, insertion);
       if (!isConvex(candidate.points)) {
         this.error = 'この辺は短すぎて頂点を追加できません。';
         return;
@@ -924,6 +946,12 @@ export function shapeEditor(form) {
           Number(this.form.width_mm),
           Number(this.form.depth_mm)
         );
+        // closeEditor() はキャンセル扱いでスナップショットへ戻すため、確定値で更新してから閉じる。
+        this.formSnapshot = {
+          shape: this.form.shape === null ? null : clone(this.form.shape),
+          width_mm: this.form.width_mm,
+          depth_mm: this.form.depth_mm
+        };
         this.closeEditor();
       } catch (error) {
         this.error = error.message;
@@ -939,6 +967,12 @@ export function shapeEditor(form) {
       );
       this.selectedIndex = null;
       this.error = '';
+      // 「矩形に戻す」は即時確定する操作なので、閉じる前に復元先も更新する。
+      this.formSnapshot = {
+        shape: null,
+        width_mm: this.form.width_mm,
+        depth_mm: this.form.depth_mm
+      };
       this.closeEditor();
     },
   };

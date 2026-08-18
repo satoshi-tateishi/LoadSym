@@ -212,8 +212,11 @@ export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
     ? originals
     : recalculated.placements;
 
+  // 人手配置を採用した場合、その配置に「勝った戦略」は存在しない。縦積み候補の
+  // core再配置は複数戦略で比較し、フル再計算を採用した場合だけ同じ戦略へ絞る。
+  const suggestionStrategy = normal === originals ? null : recalculated.strategy;
   const suggested = findStackSuggestion(
-    originals, normal, bed, obstacles, clearanceMm, recalculated.strategy
+    originals, normal, bed, obstacles, clearanceMm, suggestionStrategy
   );
   const placements = suggested?.placements ?? normal;
 
@@ -326,7 +329,8 @@ function findStackSuggestion(originals, normal, bed, obstacles, clearanceMm, bes
     if ((counts.get(arrangementGroupKey(candidate)) ?? 0) < 5) continue;
 
     const coreOriginals = originals.filter((placement) => placement.id !== candidate.id);
-    // 通常配置で選んだ1戦略だけを使う。候補数×戦略数の乗算を避けるため。
+    // 自動配置を採用した場合は勝った1戦略へ絞る。人手の既存配置を採用した場合は
+    // bestStrategy=nullとなり、無関係な戦略を使い回さず複数戦略を比較する。
     const recalculatedCore = arrangeFloor(
       coreOriginals, bed, obstacles, clearanceMm, bestStrategy
     )?.placements;
