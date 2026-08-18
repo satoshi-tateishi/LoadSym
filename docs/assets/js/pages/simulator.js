@@ -27,7 +27,7 @@ import {
   renderTruck, updatePlacementPosition, clientToBed, mmPerPixel, MARGIN_MM, viewSize,
   showDropGhost, clearDropGhost, dimPlacement
 } from '../renderer.js';
-import { downloadSvgAsPng } from '../export-png.js';
+import { downloadSvgAsJpeg } from '../export-png.js';
 import { shapeEditor, prepareEquipmentShape } from '../shape-editor.js';
 import {
   defaultCategoryIdOf, categoryDefaultColorOf, emptyEquipmentDraft, buildEquipmentValues
@@ -980,7 +980,8 @@ export function simulator() {
         if (!svg) return;
 
         const base = (this.layoutName || 'loadsym').replace(/[\\/:*?"<>|]/g, '_');
-        await downloadSvgAsPng(svg, `${base}_${slot.truck.name}.png`);
+        const title = `${this.layoutName || '無題のレイアウト'} : ${slot.truck.name}`;
+        await downloadSvgAsJpeg(svg, `${base}_${slot.truck.name}.jpg`, title);
       } catch (error) {
         console.error(error);
         this.errorMessage = translateError(error);
