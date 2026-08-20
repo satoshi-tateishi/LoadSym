@@ -17,6 +17,8 @@ permissions: {}
 
 jobs:
   ping:
+    # フォーク先などで誤ってSupabaseにpingが送られないよう、本家リポジトリでのみ実行する
+    if: github.repository == 'satoshi-tateishi/LoadSym'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
