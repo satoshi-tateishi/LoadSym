@@ -5,7 +5,7 @@ import {
   emptyEquipmentDraft,
   buildEquipmentValues
 } from '../docs/assets/js/equipment-form.js';
-import { withSaving } from '../docs/assets/js/error-messages.js';
+import { translateError, withSaving } from '../docs/assets/js/error-messages.js';
 
 const categories = [
   { id: 'speaker', name: 'スピーカー', default_color: '#123456' },
@@ -39,6 +39,19 @@ assert.deepEqual(buildEquipmentValues(form, 'other'), {
   name: '機材', category_id: 'other', width_mm: 100, depth_mm: 200,
   height_mm: 300, weight_kg: 0, color: '#123456', shape: null
 });
+
+assert.equal(
+  translateError(new Error('new row for relation "layouts" violates check constraint "layouts_clearance_mm_check"')),
+  'クリアランスの値が許容範囲外です。'
+);
+assert.equal(
+  translateError(new Error('new row violates check constraint "equipments_color_check"')),
+  '識別カラーの形式が正しくありません（#rrggbb で指定してください）。'
+);
+assert.equal(
+  translateError(new Error('new row violates check constraint "equipments_width_mm_check"')),
+  '入力値が許容範囲外です。寸法や重量を確認してください。'
+);
 
 const successful = { saving: false, errorMessage: '前のエラー' };
 await withSaving(successful, async () => {

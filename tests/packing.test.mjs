@@ -87,8 +87,36 @@ console.log('# autoArrangeSlot');
   tiny.truck.bedWidthMm = 1500;
   tiny.truck.bedDepthMm = 3500;
   const result = autoArrangeSlot(tiny, 5);
-  eq('入りきらなければ失敗', result.status, 'failed');
-  eq('失敗時は元座標を保つ', result.placements, originals);
+  eq('全点が入りきらなくても部分配置する', result.status, 'arranged');
+  eq('実荷台には収まる1点だけを置く',
+    result.placements.filter((placement) => placement.y < tiny.truck.bedDepthMm).length, 1);
+  eq('収まらない1点を仮置きとして返す', result.unplacedIds.length, 1);
+}
+{
+  // 2400×5000mmに1100×900mmを14点。10点は実荷台へ、残る4点は仮置きへ置ける。
+  const placements = Array.from({ length: 14 }, (_, index) => ({
+    id: `overflow-${index + 1}`,
+    snapshot: snapshot('大型ケース', 1100, 900, 500, 10),
+    x: index < 10 ? 10 + (index % 2) * 1110 : 10 + ((index - 10) % 2) * 1110,
+    y: index < 10 ? 10 + Math.floor(index / 2) * 910 : 6000 + Math.floor((index - 10) / 2) * 910,
+    rotation: 0
+  }));
+  const slot = makeSlot(placements);
+  slot.truck.bedWidthMm = 2400;
+  slot.truck.bedDepthMm = 5000;
+  const result = autoArrangeSlot(slot, 10);
+  const onFloor = result.placements.filter((placement) => {
+    return placement.x >= 0 && placement.y >= 0 &&
+      placement.x + placement.snapshot.widthMm <= 2400 &&
+      placement.y + placement.snapshot.depthMm <= 5000;
+  });
+  eq('14点のうち収まる10点を詰め直す', onFloor.length, 10);
+  eq('残る4点を仮置きに残す', result.unplacedIds.length, 4);
+  eq('安全な仮置き座標は変更しない',
+    result.placements.slice(10).map(({ x, y }) => ({ x, y })),
+    placements.slice(10).map(({ x, y }) => ({ x, y })));
+  eq('部分配置後も重なりやクリアランス不足がない',
+    summarize({ ...slot, placements: result.placements }, 10).invalidCount, 4);
 }
 {
   // 「積み込みテスト」の構成。人手の理想配置は奥行3185mmに、同型をブロック化して収めている。
@@ -407,6 +435,32 @@ console.log('# movePlacement');
   const { placements } = movePlacement(slot, 'p1', { x: 10, y: 10 }, 60);
   const s = summarize({ ...slot, placements });
   eq('押し出し先に障害物を選ばない', s.invalidCount, 0);
+}
+{
+  const obstacle = { id: 'wall', label: '障害物', x: 0, y: 0, w: 400, d: 600 };
+  const slot = makeSlot([
+    { id: 'a', snapshot: snapshot('A', 400, 600, 500, 10), x: 400, y: 10, rotation: 0 },
+    { id: 'b', snapshot: snapshot('B', 400, 600, 500, 10), x: 1000, y: 3000, rotation: 0 }
+  ], [obstacle]);
+
+  const movedB = movePlacement(slot, 'b', { x: 1000, y: 3200 }, 0, 10);
+  eq('離れた機材の移動で障害物付近の機材を動かさない',
+    { x: movedB.placements.find((p) => p.id === 'a').x,
+      y: movedB.placements.find((p) => p.id === 'a').y },
+    { x: 400, y: 10 });
+  const rotatedB = rotatePlacement(slot, 'b', 10);
+  eq('離れた機材の回転でも障害物付近の機材を動かさない',
+    { x: rotatedB.placements.find((p) => p.id === 'a').x,
+      y: rotatedB.placements.find((p) => p.id === 'a').y },
+    { x: 400, y: 10 });
+
+  const validSlot = makeSlot([
+    { id: 'a', snapshot: snapshot('A', 400, 600, 500, 10), x: 410, y: 10, rotation: 0 },
+    { id: 'b', snapshot: snapshot('B', 400, 600, 500, 10), x: 1000, y: 3000, rotation: 0 }
+  ], [obstacle]);
+  const movedA = movePlacement(validSlot, 'a', { x: 395, y: 10 }, 0, 10);
+  eq('障害物付近の機材を直接動かすと従来どおり棄却する', movedA.rejected, true);
+  eq('棄却時は障害物も機材も元の位置を保つ', movedA.placements, validSlot.placements);
 }
 
 console.log('# clearances');

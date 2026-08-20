@@ -433,6 +433,7 @@ export function shapeEditor(form) {
       );
       this.selectedIndex = null;
       this.activeVertex = null;
+      this.chamfers = [0, 0, 0, 0];
       this.tool = 'select';
       // 前の機材のズームは持ち越さない。開いた直後は常に既定の 2000×1000 から始める。
       this.zoomIndex = DEFAULT_ZOOM_INDEX;
@@ -688,6 +689,7 @@ export function shapeEditor(form) {
         if (valid) {
           this.parts.push(this.draft);
           this.selectedIndex = this.parts.length - 1;
+          this.chamfers = [0, 0, 0, 0];
           this.tool = 'select';
         }
       }

@@ -641,7 +641,12 @@ export function simulator() {
       slot.placements = result.placements;
       this.selectedId = null;
       this.commit(slots);
-      if (result.stackSuggestion) {
+      if (result.unplacedIds.length > 0) {
+        this.notice(
+          `${slot.truck.name} の機材を自動配置しました。` +
+          `${result.unplacedIds.length}点は収まらないため仮置きに残しています。`
+        );
+      } else if (result.stackSuggestion) {
         this.notice(this.stackSuggestionNotice(slot.truck.name, result.stackSuggestion.name));
       } else {
         this.notice(`${slot.truck.name} の機材を自動配置しました。`);

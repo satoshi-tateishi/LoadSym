@@ -294,6 +294,21 @@ console.log('# resolveOverlaps');
   eq('障害物を避けて押し出される', rectsOverlapForTest(b, tire), false);
 }
 {
+  // 動かさない形と押し出しの起点を分けられること。障害物の近くにある既存配置を、
+  // 離れた機材の操作に巻き込まないために使う。
+  const shapes = [
+    shapeOf({ id: 'moving', x: 1000, y: 1000, w: 100, d: 100 }),
+    shapeOf({ id: 'near', x: 400, y: 10, w: 400, d: 600 }),
+    shapeOf({ id: 'obstacle', x: 0, y: 0, w: 400, d: 600 })
+  ];
+  const r = resolveOverlaps(shapes, ['moving', 'obstacle'], bed, {
+    queueIds: ['moving'],
+    clearanceMm: 10
+  });
+  eq('初期キューにない不動形は押し手にならない', boundsOf(r.shapes[1].parts),
+    { id: 'near', x: 400, y: 10, w: 400, d: 600 });
+}
+{
   const l = {
     id: 'l',
     parts: [

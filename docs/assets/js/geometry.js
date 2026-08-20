@@ -537,10 +537,11 @@ function nearestCandidate(value, candidates, thresholdMm) {
  * @param {Array} shapes 全形状（障害物も pinnedIds に含めて渡す）
  * @param {Array<string>} pinnedIds 動かさない形のid
  * @param {{w:number,d:number}} bed 荷台内寸
- * @param {{preferredAxis?: 'x'|'y', clearanceMm?: number}} options
+ * @param {{preferredAxis?: 'x'|'y', clearanceMm?: number, queueIds?: Array<string>}} options
  *   preferredAxis は起点の押し出し方向のヒント
  *   （回転で幅が伸びたなら 'x'、奥行きが伸びたなら 'y' を渡す）。
  *   clearanceMm は押し出したあとに空ける隙間。
+ *   queueIds は最初に押し出しを始める形のid。省略時は pinnedIds と同じ。
  * @returns {{shapes: Array, moved: boolean, truncated: boolean}}
  *   shapes は座標を更新した新しい配列（入力は破壊しない）。
  *   truncated は反復上限で打ち切ったかどうか。
@@ -556,7 +557,7 @@ export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
   const pinnedShapes = working.filter((shape) => pinned.has(shape.id));
   const pushDirection = new Map();
 
-  const queue = [...pinnedIds];
+  const queue = (options.queueIds ?? pinnedIds).map((id) => ({ id, targetId: null }));
   let iterations = 0;
   let moved = false;
   let truncated = false;
@@ -567,10 +568,12 @@ export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
       break;
     }
 
-    const pusher = byId.get(queue.shift());
+    const queued = queue.shift();
+    const pusher = byId.get(queued.id);
     if (!pusher) continue;
 
-    for (const target of working) {
+    const targets = queued.targetId ? working.filter((shape) => shape.id === queued.targetId) : working;
+    for (const target of targets) {
       if (target.id === pusher.id) continue;
       if (pinned.has(target.id)) continue;
       // 押し出しを始める条件は、押し手がユーザーの操作対象かどうかで変える。
@@ -603,7 +606,14 @@ export function resolveOverlaps(shapes, pinnedIds, bed, options = {}) {
       // 不正な配置を確定させることはない。利用者報告が出るまでは安全性を優先する。
       pushDirection.set(target.id, displacement.axis);
       moved = true;
-      queue.push(target.id);
+      queue.push({ id: target.id, targetId: null });
+      // 連鎖で動いた機材が障害物へ近づいた場合だけ、その障害物から当該機材を
+      // 押し返す。障害物を無条件にキューへ入れると、操作と無関係な機材まで動く。
+      for (const fixed of pinnedShapes) {
+        if (fixed.id !== pusher.id && shapesOverlap(fixed, target, clearanceMm)) {
+          queue.push({ id: fixed.id, targetId: target.id });
+        }
+      }
     }
   }
 

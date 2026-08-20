@@ -136,6 +136,21 @@ console.log('\n# shapeEditor cancel/apply');
 {
   const target = { width_mm: 600, depth_mm: 400, shape: null };
   const editor = shapeEditor(target);
+  editor.chamfers = [50, 60, 70, 80];
+  editor.openEditor();
+  eq('開くと前回の角落とし量を消す', editor.chamfers, [0, 0, 0, 0]);
+
+  editor.chamfers = [200, 0, 0, 0];
+  editor.drag = { kind: 'create' };
+  editor.draft = { kind: 'rect', x: 700, y: 0, w: 400, d: 400 };
+  editor.$refs = { canvas: { hasPointerCapture: () => false } };
+  editor.pointerUp({ pointerId: 1 });
+  eq('新規パーツを確定すると角落とし量を消す', editor.chamfers, [0, 0, 0, 0]);
+  eq('新規パーツが選択される', editor.selectedIndex, 1);
+}
+{
+  const target = { width_mm: 600, depth_mm: 400, shape: null };
+  const editor = shapeEditor(target);
   editor.openEditor();
   editor.chamfers = [50, 60, 70, 80];
   editor.drag = {

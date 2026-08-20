@@ -288,11 +288,11 @@
             <template x-for="(obstacle, index) in truckForm.obstacles" :key="index">
               <div class="grid grid-cols-6 gap-1 mb-1 items-center">
                 <input x-model="obstacle.label" placeholder="名称" class="col-span-2 border rounded px-1 py-0.5 text-xs">
-                <input type="number" x-model.number="obstacle.y_mm" placeholder="x" class="border rounded px-1 py-0.5 text-xs">
-                <input type="number" x-model.number="obstacle.x_mm" placeholder="y" class="border rounded px-1 py-0.5 text-xs">
-                <input type="number" x-model.number="obstacle.width_mm" placeholder="幅" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" min="0" x-model.number="obstacle.y_mm" placeholder="x" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" min="0" x-model.number="obstacle.x_mm" placeholder="y" class="border rounded px-1 py-0.5 text-xs">
+                <input type="number" min="1" x-model.number="obstacle.width_mm" placeholder="幅" class="border rounded px-1 py-0.5 text-xs">
                 <div class="flex gap-1">
-                  <input type="number" x-model.number="obstacle.depth_mm" placeholder="奥行" class="w-full border rounded px-1 py-0.5 text-xs">
+                  <input type="number" min="1" x-model.number="obstacle.depth_mm" placeholder="奥行" class="w-full border rounded px-1 py-0.5 text-xs">
                   <button type="button" class="text-red-600 text-xs" @click="truckForm.obstacles.splice(index, 1)">×</button>
                 </div>
               </div>

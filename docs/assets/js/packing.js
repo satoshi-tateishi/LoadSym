@@ -181,7 +181,7 @@ export function duplicatePlacement(slot, placementId, idFactory, clearanceMm = D
  * 既存の空き探索へ通すことで、人手で積むときに近いまとまりを作る。
  * 同一機材が5台以上あり、1台を除外すると使用奥行きが大きく縮む場合は、その1台を
  * 縦積み候補として床面計算から外す（2D上では後方へ退避し、実際には重ねない）。
- * 1点でも置けない、または最終検証で不正が残る場合は途中結果を破棄する。
+ * 全点を置けない場合は実荷台に収まる分だけを詰め、残りを仮置きゾーンへ残す。
  *
  * DOM・履歴・通知には触れず、入力の slot / placements も変更しない。
  * @returns {{placements:Array, status:'arranged'|'unchanged'|'failed', unplacedIds:Array<string>, stackSuggestion?:object}}
@@ -196,6 +196,14 @@ export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   const obstacles = obstacleShapes(slot);
   const recalculated = arrangeFloor(originals, bed, obstacles, clearanceMm);
   if (!recalculated) {
+    const partial = arrangeFloorPartially(originals, bed, obstacles, clearanceMm);
+    if (partial) {
+      return {
+        placements: partial.placements,
+        status: 'arranged',
+        unplacedIds: partial.unplacedIds
+      };
+    }
     return {
       placements: originals,
       status: 'failed',
@@ -233,6 +241,105 @@ export function autoArrangeSlot(slot, clearanceMm = DEFAULT_CLEARANCE_MM) {
   };
   if (suggested) result.stackSuggestion = suggested.stackSuggestion;
   return result;
+}
+
+/**
+ * 全点配置が成立しないとき、現在すでに実荷台内にある機材を優先しながら、
+ * 各グループ戦略の順で個体を置けるだけ置く。残りは安全な仮置き位置を維持するか、
+ * 実荷台より後方へ移す。配置点数、床面積、使用奥行きの順で最良候補を選ぶ。
+ */
+function arrangeFloorPartially(originals, bed, obstacles, clearanceMm) {
+  let best = null;
+  for (const strategy of strategiesForCount(originals.length)) {
+    const groups = compactArrangementGroups(originals, bed, clearanceMm, strategy);
+    const ordered = groups.flatMap((group) => group.placements);
+    const floorFirst = ordered
+      .map((placement, index) => ({
+        placement,
+        index,
+        onFloor: isInsideBed(boundsOf(toParts(placement)), bed)
+      }))
+      .sort((a, b) => Number(b.onFloor) - Number(a.onFloor) || a.index - b.index)
+      .map(({ placement }) => placement);
+    const arranged = arrangeIndividuallyPartial(floorFirst, bed, obstacles, clearanceMm);
+    if (arranged.size === 0 || arranged.size === originals.length) continue;
+
+    const merged = mergeWithStaging(originals, arranged, bed, obstacles, clearanceMm);
+    if (!merged) continue;
+    const floorPlacements = merged.filter((placement) => arranged.has(placement.id));
+    const candidate = {
+      placements: merged,
+      unplacedIds: originals.filter((placement) => !arranged.has(placement.id)).map((placement) => placement.id),
+      count: arranged.size,
+      area: floorPlacements.reduce((sum, placement) => {
+        return sum + toParts(placement).reduce((partSum, part) => partSum + partArea(part), 0);
+      }, 0),
+      depth: usedDepth(floorPlacements)
+    };
+    if (
+      !best ||
+      candidate.count > best.count ||
+      (candidate.count === best.count && candidate.area > best.area) ||
+      (candidate.count === best.count && candidate.area === best.area && candidate.depth < best.depth)
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/** 指定順を保ち、入らない個体だけを飛ばして実荷台へ配置する。 */
+function arrangeIndividuallyPartial(placements, bed, obstacles, clearanceMm) {
+  const arranged = new Map();
+  const occupied = [];
+  for (const placement of placements) {
+    const free = findFreeSpot(
+      toParts({ ...placement, x: 0, y: 0 }), occupied, bed, obstacles, clearanceMm
+    );
+    if (!free) continue;
+    const next = { ...placement, x: free.x, y: free.y };
+    arranged.set(next.id, next);
+    occupied.push(toShape(next));
+  }
+  return arranged;
+}
+
+/** 床面に置けなかった機材を、他の配置を壊さず仮置きゾーンへ残す。 */
+function mergeWithStaging(originals, arranged, bed, obstacles, clearanceMm) {
+  const workingBed = { w: bed.w, d: Math.max(bed.d, REFERENCE_DEPTH_MM) };
+  const frontBlocker = rectToShape({ id: '__partial_floor__', x: 0, y: 0, w: bed.w, d: bed.d });
+  const occupied = [...arranged.values()].map(toShape);
+  const byId = new Map(arranged);
+
+  for (const original of originals) {
+    if (arranged.has(original.id)) continue;
+    const originalShape = toShape(original);
+    const originalBounds = boundsOf(originalShape.parts);
+    const canStay = originalBounds.y >= bed.d + clearanceMm &&
+      findInvalidShapes([...occupied, originalShape], workingBed, obstacles, clearanceMm).size === 0;
+    if (canStay) {
+      byId.set(original.id, original);
+      occupied.push(originalShape);
+      continue;
+    }
+
+    const free = findFreeSpot(
+      toParts({ ...original, x: 0, y: 0 }),
+      occupied,
+      workingBed,
+      [...obstacles, frontBlocker],
+      clearanceMm
+    );
+    if (!free) return null;
+    const staged = { ...original, x: free.x, y: free.y };
+    byId.set(staged.id, staged);
+    occupied.push(toShape(staged));
+  }
+
+  const placements = originals.map((placement) => byId.get(placement.id));
+  return findInvalidShapes(placements.map(toShape), workingBed, obstacles, clearanceMm).size === 0
+    ? placements
+    : null;
 }
 
 /** 複数のグループ戦略を最後まで走らせ、成立した完成配置から最良を選ぶ。 */
@@ -763,7 +870,12 @@ function settle(slot, before, pinnedPlacementId, preferredAxis, clearanceMm) {
   const shapes = [...placementShapes(slot), ...obstacles];
   const pinnedIds = [pinnedPlacementId, ...obstacles.map((shape) => shape.id)];
 
-  const resolved = resolveOverlaps(shapes, pinnedIds, workingBedOf(slot), { preferredAxis, clearanceMm });
+  const resolved = resolveOverlaps(shapes, pinnedIds, workingBedOf(slot), {
+    preferredAxis,
+    clearanceMm,
+    // 障害物は押し出し対象から除外するだけで、操作と無関係な機材を押す起点にはしない。
+    queueIds: [pinnedPlacementId]
+  });
   const byId = new Map(resolved.shapes.map((shape) => [shape.id, boundsOf(shape.parts)]));
 
   const placements = slot.placements.map((placement) => {

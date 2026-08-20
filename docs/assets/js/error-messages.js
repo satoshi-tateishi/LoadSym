@@ -1,6 +1,17 @@
 // Supabase/PostgreSQLから返る生のエラーメッセージを、わかりやすい日本語に変換する。
 // 該当する変換ルールがない場合は元のメッセージをそのまま返す
 // （登録数制限トリガなど、DB側で最初から日本語のメッセージを投げているものがあるため）。
+const CHECK_CONSTRAINT_MESSAGES = [
+  {
+    constraint: /_color_check/i,
+    message: '識別カラーの形式が正しくありません（#rrggbb で指定してください）。'
+  },
+  {
+    constraint: /clearance/i,
+    message: 'クリアランスの値が許容範囲外です。'
+  }
+];
+
 export function translateError(error) {
   const message = error?.message ?? String(error);
 
@@ -12,11 +23,9 @@ export function translateError(error) {
     return 'この操作を行う権限がありません。';
   }
 
-  if (/violates check constraint .*_color_check/i.test(message)) {
-    return '識別カラーの形式が正しくありません（#rrggbb で指定してください）。';
-  }
-
   if (/violates check constraint/i.test(message)) {
+    const matched = CHECK_CONSTRAINT_MESSAGES.find(({ constraint }) => constraint.test(message));
+    if (matched) return matched.message;
     return '入力値が許容範囲外です。寸法や重量を確認してください。';
   }
 
